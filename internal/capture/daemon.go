@@ -32,14 +32,18 @@ type Daemon struct {
 	mu         sync.Mutex
 	captureDir string
 	lastSeen   string
+	startMark  string // only process pcap files newer than this (basename)
 }
 
 // NewDaemon creates a new capture daemon.
 func NewDaemon(cfg *config.Config, taskChan chan<- *Task) *Daemon {
+	// Set startMark to current time so we skip all pre-existing pcap files
+	mark := fmt.Sprintf("capture_%s.pcap", time.Now().Format("20060102_150405"))
 	return &Daemon{
 		cfg:        cfg,
 		taskChan:   taskChan,
 		captureDir: cfg.CaptureDir,
+		startMark:  mark,
 	}
 }
 
@@ -148,6 +152,10 @@ func (d *Daemon) enqueueCompleted(flushAll bool) {
 		pcapPath := matches[i]
 		base := filepath.Base(pcapPath)
 		if base <= lastSeen {
+			continue
+		}
+		// Skip pre-existing pcap files from before this daemon started
+		if d.startMark != "" && base < d.startMark {
 			continue
 		}
 
