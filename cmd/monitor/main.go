@@ -62,6 +62,9 @@ func main() {
 	}
 	defer store.Close()
 
+	// Load pricing catalog from XLSX
+	api.LoadPricingCatalog(cfg.PricingXLSXPath)
+
 	// Initialize schema
 	if err := store.InitDB(); err != nil {
 		log.Fatalf("database init failed: %v", err)

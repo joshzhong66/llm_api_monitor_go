@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -422,15 +423,18 @@ func (s *Store) QueryLogs(vendor, search, channelClass string, timeWindowMinutes
 
 	var items []map[string]interface{}
 	for rows.Next() {
+		var id int64
 		var r model.Session
-		if err := rows.Scan(&r.CaptureJobID, &r.CaptureJobID, &r.Iface, &r.SrcIP, &r.SrcPort,
+		if err := rows.Scan(&id, &r.CaptureJobID, &r.Iface, &r.SrcIP, &r.SrcPort,
 			&r.DstIP, &r.DstPort, &r.FirstSeen, &r.Vendor, &r.Domain,
 			&r.UplinkBytes, &r.DownlinkBytes, &r.TotalBytes,
 			&r.RequestCount, &r.PacketCount, &r.SessionKey, &r.LastSeen,
 			&r.UpdatedAt, &r.ClosedAt, &r.Status); err != nil {
 			return nil, err
 		}
-		items = append(items, sessionToMap(&r))
+		m := sessionToMap(&r)
+		m["id"] = id
+		items = append(items, m)
 	}
 
 	return &model.PagedResult{
@@ -442,20 +446,18 @@ func (s *Store) QueryLogs(vendor, search, channelClass string, timeWindowMinutes
 	}, nil
 }
 
-// QuerySummary returns vendor-level aggregation.
+// QuerySummary returns vendor+domain level aggregation (matches Python version).
 func (s *Store) QuerySummary() ([]map[string]interface{}, error) {
 	rows, err := s.DB.Query(`SELECT
-		vendor,
+		vendor, domain,
 		COUNT(*) AS session_count,
-		SUM(uplink_bytes) AS total_uplink,
-		SUM(downlink_bytes) AS total_downlink,
-		SUM(total_bytes) AS total_bytes,
-		SUM(request_count) AS total_requests,
-		MIN(first_seen) AS earliest,
-		MAX(last_seen) AS latest
+		COALESCE(SUM(uplink_bytes), 0) AS uplink_bytes,
+		COALESCE(SUM(downlink_bytes), 0) AS downlink_bytes,
+		COALESCE(SUM(total_bytes), 0) AS total_bytes,
+		COALESCE(SUM(request_count), 0) AS request_count,
+		MAX(COALESCE(last_seen, first_seen)) AS latest_seen
 		FROM api_logs
-		GROUP BY vendor
-		ORDER BY total_bytes DESC`)
+		GROUP BY vendor, domain`)
 	if err != nil {
 		return nil, err
 	}
@@ -463,25 +465,44 @@ func (s *Store) QuerySummary() ([]map[string]interface{}, error) {
 
 	var results []map[string]interface{}
 	for rows.Next() {
-		var vendor string
+		var vendor, domain string
 		var sessionCount, totalRequests int
 		var totalUplink, totalDownlink, totalBytes int64
-		var earliest, latest string
-		if err := rows.Scan(&vendor, &sessionCount, &totalUplink, &totalDownlink,
-			&totalBytes, &totalRequests, &earliest, &latest); err != nil {
+		var latestSeen sql.NullString
+		if err := rows.Scan(&vendor, &domain, &sessionCount, &totalUplink, &totalDownlink,
+			&totalBytes, &totalRequests, &latestSeen); err != nil {
 			return nil, err
+		}
+		latest := ""
+		if latestSeen.Valid {
+			latest = latestSeen.String
 		}
 		results = append(results, map[string]interface{}{
 			"vendor":        vendor,
+			"domain":        domain,
 			"session_count": sessionCount,
 			"uplink_bytes":  totalUplink,
 			"downlink_bytes": totalDownlink,
 			"total_bytes":   totalBytes,
 			"request_count": totalRequests,
-			"earliest":      earliest,
-			"latest":        latest,
+			"latest_seen":   latest,
 		})
 	}
+	// Sort: rows with latest_seen first (by time desc), then idle rows
+	sort.SliceStable(results, func(i, j int) bool {
+		li := results[i]["latest_seen"].(string)
+		lj := results[j]["latest_seen"].(string)
+		if li == "" && lj == "" {
+			return false
+		}
+		if li == "" {
+			return false
+		}
+		if lj == "" {
+			return true
+		}
+		return li > lj
+	})
 	return results, nil
 }
 
@@ -620,7 +641,7 @@ func (s *Store) QueryJobs(limit int) ([]map[string]interface{}, error) {
 
 // QueryAllTargetRules returns all target rules grouped by vendor.
 func (s *Store) QueryAllTargetRules() ([]map[string]interface{}, error) {
-	rows, err := s.DB.Query(`SELECT id, vendor, domain_pattern, match_type, source, enabled
+	rows, err := s.DB.Query(`SELECT id, vendor, domain_pattern, match_type, source, enabled, created_at, updated_at
 		FROM target_rules ORDER BY vendor, domain_pattern`)
 	if err != nil {
 		return nil, err
@@ -631,9 +652,9 @@ func (s *Store) QueryAllTargetRules() ([]map[string]interface{}, error) {
 	var vendorOrder []string
 	for rows.Next() {
 		var id int64
-		var vendor, domainPattern, matchType, source string
+		var vendor, domainPattern, matchType, source, createdAt, updatedAt string
 		var enabled int
-		if err := rows.Scan(&id, &vendor, &domainPattern, &matchType, &source, &enabled); err != nil {
+		if err := rows.Scan(&id, &vendor, &domainPattern, &matchType, &source, &enabled, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		if _, exists := vendorMap[vendor]; !exists {
@@ -641,7 +662,9 @@ func (s *Store) QueryAllTargetRules() ([]map[string]interface{}, error) {
 		}
 		vendorMap[vendor] = append(vendorMap[vendor], map[string]interface{}{
 			"id": id, "domain_pattern": domainPattern,
-			"match_type": matchType, "source": source, "enabled": enabled,
+			"match_type": matchType, "source": source,
+			"enabled": enabled == 1,
+			"created_at": createdAt, "updated_at": updatedAt,
 		})
 	}
 

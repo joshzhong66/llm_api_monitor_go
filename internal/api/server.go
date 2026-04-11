@@ -345,13 +345,23 @@ func enrichUsageMetrics(row map[string]interface{}, cfg *config.Config) {
 		uncachedInputTokens = inputTokens
 		billableInputTokens = float64(inputTokens)
 
-		// Default pricing
-		pricingModel = "default-generic"
-		pricingSource = "legacy token formula converted from CNY"
-		pricingInputPer1M = (cfg.InputTokenCostCNY / cfg.USDCNYRate) * 1e6
-		pricingOutputPer1M = (cfg.OutputTokenCostCNY / cfg.USDCNYRate) * 1e6
-		estimatedCostUSD = (float64(inputTokens)*cfg.InputTokenCostCNY + float64(outputTokens)*cfg.OutputTokenCostCNY) / cfg.USDCNYRate
-		formula = "default_bits_usd_v1"
+		// Try official pricing from XLSX
+		pricingRule := SelectPricingRule(vendor, domain)
+		if pricingRule != nil {
+			pricingModel = pricingRule.Model
+			pricingSource = pricingRule.SourceURL
+			pricingInputPer1M = pricingRule.InputPer1M
+			pricingOutputPer1M = pricingRule.OutputPer1M
+			estimatedCostUSD = float64(inputTokens)*pricingInputPer1M/1e6 + float64(outputTokens)*pricingOutputPer1M/1e6
+			formula = "official_pricing_xlsx_v1"
+		} else {
+			pricingModel = "default-generic"
+			pricingSource = "legacy token formula converted from CNY"
+			pricingInputPer1M = (cfg.InputTokenCostCNY / cfg.USDCNYRate) * 1e6
+			pricingOutputPer1M = (cfg.OutputTokenCostCNY / cfg.USDCNYRate) * 1e6
+			estimatedCostUSD = (float64(inputTokens)*cfg.InputTokenCostCNY + float64(outputTokens)*cfg.OutputTokenCostCNY) / cfg.USDCNYRate
+			formula = "default_bits_usd_v1"
+		}
 	}
 
 	row["input_tokens"] = inputTokens
