@@ -1,0 +1,15 @@
+[Unit]
+Description=LLM API Monitor (Go)
+After=network.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/llm_api_monitor_go
+ExecStart=/root/llm_api_monitor_go/llm-api-monitor
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+Environment=GOPROXY=https://goproxy.cn,direct
+
+[Install]
+WantedBy=multi-user.target

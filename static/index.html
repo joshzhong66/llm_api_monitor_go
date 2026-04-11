@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>厂商 API 消费日志平台</title>
+  <link rel="stylesheet" href="/styles.css?v=20260410_1431">
+</head>
+<body>
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="brand-card">
+        <p class="eyebrow">模型接口监控中心</p>
+        <h1>厂商 API 消费日志平台</h1>
+        <p class="subtext">常驻后台持续抓包、持续解析、持续落库。现在按 API 调用、网页版流量、会话、请求和 QUIC 诊断拆开展示。</p>
+      </div>
+      <div class="sidebar-card">
+        <p class="sidebar-label">运行状态</p>
+        <div id="sidebarStatus"></div>
+        <div class="sidebar-note">API 调用通常更容易识别。网页对话如果走 QUIC / HTTP3，会单独进入 QUIC 诊断视图。</div>
+      </div>
+      <div class="sidebar-card">
+        <p class="sidebar-label">功能导航</p>
+        <div id="sidebarNav" class="sidebar-nav"></div>
+      </div>
+      <div class="sidebar-card">
+        <p class="sidebar-label">新增厂商域名</p>
+        <form id="targetForm" class="target-form">
+          <label><span>厂商名称</span><input id="vendorInput" type="text" placeholder="例如：OpenRouter"></label>
+          <label><span>域名或通配规则</span><input id="domainInput" type="text" placeholder="例如：api.openrouter.ai, *.openai.azure.com"></label>
+          <label><span>匹配方式</span>
+            <select id="matchTypeInput">
+              <option value="exact">精确匹配</option>
+              <option value="wildcard">通配匹配</option>
+            </select>
+          </label>
+          <button type="submit">保存规则</button>
+        </form>
+      </div>
+    </aside>
+    <main class="main-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">当前视图</p>
+          <h2 id="heroViewTitle">API 消费汇总</h2>
+          <div id="heroStats" class="meta-row"></div>
+        </div>
+        <div class="hero-side">
+          <div class="status-pill" id="heroStatus">载入中</div>
+          <span id="refreshHint">自动刷新中</span>
+        </div>
+      </header>
+      <div id="pageAlert" class="alert-banner hidden"></div>
+      <section class="toolbar panel">
+        <div class="toolbar-main">
+          <div><p class="toolbar-label">厂商筛选</p><div id="vendorFilters" class="filter-row"></div></div>
+          <div><p class="toolbar-label">系统信息</p><div id="statusMeta" class="meta-row"></div></div>
+        </div>
+        <div id="pipelineHint" class="panel-note"></div>
+      </section>
+      <section id="summarySection" class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Summary</p>
+            <h3 id="summaryPanelTitle">API 消费汇总</h3>
+          </div>
+          <div class="panel-actions">
+            <input id="summarySearchInput" class="search-input" type="search" placeholder="搜索厂商、域名、调用类型或时间">
+            <button id="exportSummaryBtn" class="ghost action-button" type="button">导出汇总 CSV</button>
+          </div>
+        </div>
+        <p id="summarySearchMeta" class="search-meta"></p>
+        <div class="table-wrap">
+          <table class="compact-table">
+            <thead>
+              <tr>
+                <th>模型厂商</th>
+                <th>访问域名</th>
+                <th>调用类型</th>
+                <th>会话数</th>
+                <th>请求次数</th>
+                <th>上行流量</th>
+                <th>下行流量</th>
+                <th>总流量</th>
+                <th>输入 Token</th>
+                <th>输出 Token</th>
+                <th>总 Token</th>
+                <th>预估金额 USD</th>
+                <th>最近访问时间</th>
+              </tr>
+            </thead>
+            <tbody id="summaryBody"></tbody>
+          </table>
+        </div>
+      </section>
+      <section id="sessionSection" class="panel hidden">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Sessions</p>
+            <h3 id="sessionPanelTitle">API 会话日志</h3>
+          </div>
+          <div class="panel-actions">
+            <input id="sessionSearchInput" class="search-input" type="search" placeholder="搜索网卡、源 IP、厂商、域名或时间">
+            <button id="exportSessionBtn" class="ghost action-button" type="button">导出当前筛选会话 CSV</button>
+          </div>
+        </div>
+        <div id="sessionTimeFilters" class="filter-row subfilter-row"></div>
+        <p id="sessionSearchMeta" class="search-meta"></p>
+        <div class="table-wrap">
+          <table class="compact-table">
+            <thead>
+              <tr>
+                <th>抓包网卡</th>
+                <th>源 IP</th>
+                <th>首次时间</th>
+                <th>最近时间</th>
+                <th>调用类型</th>
+                <th>模型厂商</th>
+                <th>访问域名</th>
+                <th>上行流量</th>
+                <th>下行流量</th>
+                <th>总流量</th>
+                <th>输入 Token</th>
+                <th>输出 Token</th>
+                <th>总 Token</th>
+                <th>预估金额 USD</th>
+                <th>请求次数</th>
+              </tr>
+            </thead>
+            <tbody id="sessionLogBody"></tbody>
+          </table>
+        </div>
+        <div id="sessionPagination" class="pagination-row"></div>
+      </section>
+      <section id="requestSection" class="panel hidden">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Requests</p>
+            <h3 id="requestPanelTitle">API 请求明细</h3>
+          </div>
+          <div class="panel-actions">
+            <input id="requestSearchInput" class="search-input" type="search" placeholder="搜索网卡、源 IP、厂商、域名或时间">
+            <button id="exportRequestBtn" class="ghost action-button" type="button">导出当前筛选明细 CSV</button>
+          </div>
+        </div>
+        <div id="requestTimeFilters" class="filter-row subfilter-row"></div>
+        <p id="requestSearchMeta" class="search-meta"></p>
+        <p id="requestLatencyHint" class="panel-note"></p>
+        <div class="table-wrap">
+          <table class="compact-table">
+            <thead>
+              <tr>
+                <th>抓包网卡</th>
+                <th>源 IP</th>
+                <th>访问时间</th>
+                <th>调用类型</th>
+                <th>模型厂商</th>
+                <th>访问域名</th>
+                <th>上行流量</th>
+                <th>下行流量</th>
+                <th>总流量</th>
+                <th>输入 Token</th>
+                <th>输出 Token</th>
+                <th>总 Token</th>
+                <th>预估金额 USD</th>
+                <th>请求次数</th>
+              </tr>
+            </thead>
+            <tbody id="requestLogBody"></tbody>
+          </table>
+        </div>
+        <div id="requestPagination" class="pagination-row"></div>
+      </section>
+      <section id="quicSection" class="panel hidden">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Diagnostics</p>
+            <h3>QUIC 诊断</h3>
+          </div>
+          <div class="panel-actions">
+            <input id="quicSearchInput" class="search-input" type="search" placeholder="搜索厂商、域名、源 IP、目标 IP、协议、备注">
+          </div>
+        </div>
+        <div id="quicTimeFilters" class="filter-row subfilter-row"></div>
+        <p id="quicSearchMeta" class="search-meta"></p>
+        <p id="quicHint" class="panel-note"></p>
+        <div class="table-wrap">
+          <table class="compact-table">
+            <thead>
+              <tr>
+                <th>模型厂商</th>
+                <th>识别域名</th>
+                <th>源 IP</th>
+                <th>源端口</th>
+                <th>目标 IP</th>
+                <th>目标端口</th>
+                <th>协议</th>
+                <th>调用类型</th>
+                <th>包数</th>
+                <th>总流量</th>
+                <th>首次时间</th>
+                <th>最近时间</th>
+              </tr>
+            </thead>
+            <tbody id="quicBody"></tbody>
+          </table>
+        </div>
+        <div id="quicPagination" class="pagination-row"></div>
+      </section>
+      <section id="interfaceTrafficSection" class="panel hidden">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Interface</p>
+            <h3>接口实时流量</h3>
+          </div>
+        </div>
+        <p id="interfaceTrafficMeta" class="search-meta"></p>
+        <p id="interfaceTrafficHint" class="panel-note"></p>
+        <div id="interfaceTrafficTotals" class="traffic-metric-grid"></div>
+        <div class="table-wrap">
+          <table class="compact-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>节点 A</th>
+                <th>节点 B</th>
+                <th>A =&gt; B</th>
+                <th>A &lt;= B</th>
+              </tr>
+            </thead>
+            <tbody id="interfaceTrafficBody"></tbody>
+          </table>
+        </div>
+      </section>
+      <section id="targetSection" class="panel hidden">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Rules</p>
+            <h3>厂商域名规则</h3>
+          </div>
+        </div>
+        <div id="targetList" class="target-grid"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js?v=20260410_1431"></script>
+</body>
+</html>
