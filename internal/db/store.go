@@ -394,7 +394,7 @@ func (s *Store) LoadOpenSessions() ([]*model.Session, error) {
 
 // QueryLogs queries api_logs with filtering and pagination.
 func (s *Store) QueryLogs(vendor, search, channelClass string, timeWindowMinutes, page, pageSize int) (*model.PagedResult, error) {
-	where, args := buildLogFilters(vendor, search, "", timeWindowMinutes)
+	where, args := buildLogFilters(vendor, search, channelClass, timeWindowMinutes)
 
 	var total int
 	countSQL := "SELECT COUNT(*) FROM api_logs" + where
@@ -508,7 +508,7 @@ func (s *Store) QuerySummary() ([]map[string]interface{}, error) {
 
 // QueryRequestLogs queries request_logs with filtering and pagination.
 func (s *Store) QueryRequestLogs(vendor, search, channelClass string, timeWindowMinutes, page, pageSize int) (*model.PagedResult, error) {
-	where, args := buildRequestLogFilters(vendor, search, timeWindowMinutes)
+	where, args := buildRequestLogFilters(vendor, search, channelClass, timeWindowMinutes)
 
 	var total int
 	if err := s.DB.QueryRow("SELECT COUNT(*) FROM request_logs"+where, args...).Scan(&total); err != nil {
@@ -707,6 +707,13 @@ func (s *Store) AddTargetRules(vendor string, domains []string, matchType string
 	return tx.Commit()
 }
 
+// WebDomainHints are domains classified as "web" (browser) traffic.
+var WebDomainHints = []string{
+	"aistudio.google.com", "chat.openai.com", "chatgpt.com", "claude.ai",
+	"gemini.google.com", "grok.com", "kimi.com", "kimi.moonshot.cn",
+	"qwen.ai", "tongyi.aliyun.com",
+}
+
 // helper: build WHERE clause for api_logs
 func buildLogFilters(vendor, search, channelClass string, timeWindowMinutes int) (string, []interface{}) {
 	var clauses []string
@@ -717,15 +724,12 @@ func buildLogFilters(vendor, search, channelClass string, timeWindowMinutes int)
 		args = append(args, vendor)
 	}
 	if search != "" {
-		clauses = append(clauses, "(domain LIKE ? OR src_ip LIKE ? OR dst_ip LIKE ? OR vendor LIKE ?)")
+		clauses = append(clauses, "(iface LIKE ? OR src_ip LIKE ? OR vendor LIKE ? OR domain LIKE ? OR first_seen LIKE ? OR COALESCE(last_seen,'') LIKE ?)")
 		s := "%" + search + "%"
-		args = append(args, s, s, s, s)
+		args = append(args, s, s, s, s, s, s)
 	}
-	if timeWindowMinutes > 0 {
-		cutoff := time.Now().UTC().Add(8 * time.Hour).Add(-time.Duration(timeWindowMinutes) * time.Minute).Format("2006-01-02 15:04:05")
-		clauses = append(clauses, "last_seen >= ?")
-		args = append(args, cutoff)
-	}
+	applyChannelClass(&clauses, &args, "domain", channelClass)
+	applyTimeWindow(&clauses, &args, "capture_job_id", timeWindowMinutes)
 
 	if len(clauses) == 0 {
 		return "", nil
@@ -733,7 +737,7 @@ func buildLogFilters(vendor, search, channelClass string, timeWindowMinutes int)
 	return " WHERE " + strings.Join(clauses, " AND "), args
 }
 
-func buildRequestLogFilters(vendor, search string, timeWindowMinutes int) (string, []interface{}) {
+func buildRequestLogFilters(vendor, search, channelClass string, timeWindowMinutes int) (string, []interface{}) {
 	var clauses []string
 	var args []interface{}
 
@@ -742,15 +746,12 @@ func buildRequestLogFilters(vendor, search string, timeWindowMinutes int) (strin
 		args = append(args, vendor)
 	}
 	if search != "" {
-		clauses = append(clauses, "(domain LIKE ? OR src_ip LIKE ? OR dst_ip LIKE ?)")
+		clauses = append(clauses, "(iface LIKE ? OR src_ip LIKE ? OR vendor LIKE ? OR domain LIKE ? OR seen_at LIKE ?)")
 		s := "%" + search + "%"
-		args = append(args, s, s, s)
+		args = append(args, s, s, s, s, s)
 	}
-	if timeWindowMinutes > 0 {
-		cutoff := time.Now().UTC().Add(8 * time.Hour).Add(-time.Duration(timeWindowMinutes) * time.Minute).Format("2006-01-02 15:04:05")
-		clauses = append(clauses, "seen_at >= ?")
-		args = append(args, cutoff)
-	}
+	applyChannelClass(&clauses, &args, "domain", channelClass)
+	applyTimeWindow(&clauses, &args, "capture_job_id", timeWindowMinutes)
 
 	if len(clauses) == 0 {
 		return "", nil
@@ -775,16 +776,43 @@ func buildTransportFilters(srcIP, protocol, search string, timeWindowMinutes int
 		s := "%" + search + "%"
 		args = append(args, s, s, s)
 	}
-	if timeWindowMinutes > 0 {
-		cutoff := time.Now().UTC().Add(8 * time.Hour).Add(-time.Duration(timeWindowMinutes) * time.Minute).Format("2006-01-02 15:04:05")
-		clauses = append(clauses, "last_seen >= ?")
-		args = append(args, cutoff)
-	}
+	applyTimeWindow(&clauses, &args, "capture_job_id", timeWindowMinutes)
 
 	if len(clauses) == 0 {
 		return "", nil
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+// applyChannelClass adds domain IN/NOT IN filter based on channel class.
+func applyChannelClass(clauses *[]string, args *[]interface{}, columnName, channelClass string) {
+	channelClass = strings.TrimSpace(strings.ToLower(channelClass))
+	if channelClass != "api" && channelClass != "web" {
+		return
+	}
+	placeholders := make([]string, len(WebDomainHints))
+	for i := range WebDomainHints {
+		placeholders[i] = "?"
+	}
+	ph := strings.Join(placeholders, ",")
+	if channelClass == "web" {
+		*clauses = append(*clauses, fmt.Sprintf("%s IN (%s)", columnName, ph))
+	} else {
+		*clauses = append(*clauses, fmt.Sprintf("(%s NOT IN (%s) OR %s IS NULL OR %s = '')", columnName, ph, columnName, columnName))
+	}
+	for _, d := range WebDomainHints {
+		*args = append(*args, d)
+	}
+}
+
+// applyTimeWindow adds time window filter using capture_jobs subquery (matches Python version).
+func applyTimeWindow(clauses *[]string, args *[]interface{}, jobColumnName string, timeWindowMinutes int) {
+	if timeWindowMinutes <= 0 {
+		return
+	}
+	cutoff := time.Now().UTC().Add(8 * time.Hour).Add(-time.Duration(timeWindowMinutes) * time.Minute).Format("2006-01-02 15:04:05")
+	*clauses = append(*clauses, fmt.Sprintf("%s IN (SELECT id FROM capture_jobs WHERE status = ? AND analysis_finished_at >= ?)", jobColumnName))
+	*args = append(*args, "parsed", cutoff)
 }
 
 func sessionToMap(s *model.Session) map[string]interface{} {
