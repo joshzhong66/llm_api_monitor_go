@@ -8,6 +8,7 @@ allowed_types=("feat" "fix" "perf" "docs" "refactor" "style" "chore")
 default_type="fix"
 default_coauthor="Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 coauthor="${COMMIT_COAUTHOR:-$default_coauthor}"
+current_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 
 trim() {
     local value="$1"
@@ -84,3 +85,14 @@ git commit -m "$commit_subject" -m "Co-Authored-By: ${coauthor}"
 echo
 echo "=== 提交完成 ==="
 git log -1 --stat
+
+if [[ -n "$current_branch" && "$current_branch" != "HEAD" ]]; then
+    echo
+    read -r -p "是否推送到 origin/${current_branch}？[Y/n]: " push_confirm
+    push_confirm="$(trim "${push_confirm:-Y}")"
+    if [[ "$push_confirm" =~ ^([Yy]|)$ ]]; then
+        git push origin "${current_branch}"
+    else
+        echo "已跳过推送。"
+    fi
+fi
