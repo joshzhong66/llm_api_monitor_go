@@ -134,11 +134,12 @@ type WorkerPool struct {
 	taskCh   <-chan *capture.Task
 	resultCh chan<- *WorkerResult
 	workers  int
+	writer   *Daemon // reference to writer for direct backfill writes
 }
 
 // NewWorkerPool creates a worker pool.
 func NewWorkerPool(cfg *config.Config, engine *parser.Engine, store *db.Store,
-	taskCh <-chan *capture.Task, resultCh chan<- *WorkerResult, workers int) *WorkerPool {
+	taskCh <-chan *capture.Task, resultCh chan<- *WorkerResult, workers int, writerDaemon *Daemon) *WorkerPool {
 	return &WorkerPool{
 		cfg:      cfg,
 		engine:   engine,
@@ -146,6 +147,7 @@ func NewWorkerPool(cfg *config.Config, engine *parser.Engine, store *db.Store,
 		taskCh:   taskCh,
 		resultCh: resultCh,
 		workers:  workers,
+		writer:   writerDaemon,
 	}
 }
 
@@ -256,6 +258,8 @@ func (wp *WorkerPool) handleTask(ctx context.Context, task *capture.Task, worker
 }
 
 // backfillLoop claims queued jobs from DB and processes them.
+// Writes directly to DB via writer.processResult, does NOT go through resultCh,
+// so real-time data is never blocked.
 func (wp *WorkerPool) backfillLoop(ctx context.Context) {
 	log.Printf("[backfill] started — processing queued capture jobs from DB")
 	processed := 0
@@ -271,11 +275,10 @@ func (wp *WorkerPool) backfillLoop(ctx context.Context) {
 			continue
 		}
 		if job == nil {
-			// No more queued jobs
 			if processed > 0 {
 				log.Printf("[backfill] finished — processed %d jobs, no more queued", processed)
+				processed = 0
 			}
-			// Poll every 30s in case new queued jobs appear
 			select {
 			case <-ctx.Done():
 				return
@@ -284,9 +287,7 @@ func (wp *WorkerPool) backfillLoop(ctx context.Context) {
 			}
 		}
 
-		// Check pcap file exists
 		if _, err := os.Stat(job.PcapPath); err != nil {
-			log.Printf("[backfill] pcap missing, skip: %s", job.PcapPath)
 			_ = wp.store.UpdateJobStatus(job.ID, map[string]interface{}{
 				"status": "failed", "analysis_status": "failed",
 				"message": "pcap file not found",
@@ -294,7 +295,6 @@ func (wp *WorkerPool) backfillLoop(ctx context.Context) {
 			continue
 		}
 
-		// Parse with gopacket
 		result, err := wp.engine.ParsePcap(job.PcapPath)
 		if err != nil {
 			log.Printf("[backfill] parse error %s: %v", job.PcapPath, err)
@@ -309,24 +309,14 @@ func (wp *WorkerPool) backfillLoop(ctx context.Context) {
 		result.QueueName = job.QueueName
 		result.WorkerName = "go-backfill"
 
-		// Send to writer via channel
-		select {
-		case wp.resultCh <- &WorkerResult{
-			ParseResult: result,
-			JobID:       job.ID,
-			PcapPath:    job.PcapPath,
-		}:
-		case <-ctx.Done():
-			return
+		// Write directly to DB (bypasses channel, never blocks real-time)
+		wr := &WorkerResult{ParseResult: result, JobID: job.ID, PcapPath: job.PcapPath}
+		if err := wp.writer.processResult(wr); err != nil {
+			log.Printf("[backfill] write error %s: %v", job.PcapPath, err)
 		}
 
-		_ = wp.store.UpdateJobStatus(job.ID, map[string]interface{}{
-			"status":          "queued",
-			"analysis_status": "parsed_ready",
-		})
-
 		processed++
-		if processed%50 == 0 {
+		if processed%100 == 0 {
 			log.Printf("[backfill] progress: %d jobs processed", processed)
 		}
 	}

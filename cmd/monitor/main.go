@@ -120,11 +120,7 @@ func main() {
 
 	// Start all components concurrently
 
-	// 1. Parser worker pool (N goroutines reading tasks, writing results)
-	workerPool := writer.NewWorkerPool(cfg, engine, store, taskCh, resultCh, cfg.RealtimeWorkers)
-	go workerPool.Run(ctx)
-
-	// 2. Writer daemon (reads results, merges into sessions, writes to DB)
+	// 1. Writer daemon (must be created before worker pool for backfill reference)
 	apiServer := api.NewServer(cfg, store, engine)
 	ipLookup := func(ip string) (string, string, string) {
 		entry := apiServer.LookupIP(ip)
@@ -139,6 +135,10 @@ func main() {
 			log.Printf("[writer] fatal: %v", err)
 		}
 	}()
+
+	// 2. Parser worker pool (N goroutines reading tasks, writing results + backfill)
+	workerPool := writer.NewWorkerPool(cfg, engine, store, taskCh, resultCh, cfg.RealtimeWorkers, writerDaemon)
+	go workerPool.Run(ctx)
 
 	// 3. Capture daemon (runs tcpdump, produces tasks)
 	if cfg.Autostart {
