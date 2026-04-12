@@ -75,6 +75,7 @@ const state = {
   selectedVendor: '全部',
   selectedView: 'apiSummary',
   status: null,
+  pipeline: null,
   summary: [],
   logsPage: emptyPaged(SESSION_PAGE_SIZE),
   requestLogsPage: emptyPaged(REQUEST_PAGE_SIZE),
@@ -473,6 +474,27 @@ function renderSidebar() {
   });
 }
 
+function pipelineChips() {
+  const p = state.pipeline;
+  if (!p) return '<span class="meta-chip">管道: 加载中</span>';
+  const lag = pipelineLag(p);
+  const lagClass = lag <= 60 ? 'ok' : lag <= 300 ? 'warn' : 'error';
+  const lagText = lag <= 60 ? lag + 's' : lag < 3600 ? Math.floor(lag/60) + 'm' + (lag%60) + 's' : Math.floor(lag/3600) + 'h' + Math.floor(lag%3600/60) + 'm';
+  const pending = p.pending_jobs || 0;
+  let chips = `<span class="meta-chip pipeline-${lagClass}">延迟 ${lagText}</span>`;
+  chips += `<span class="meta-chip">已解析 ${p.progress_pct || 0}% (${numberFmt(p.merged_jobs || 0)}/${numberFmt(p.total_jobs || 0)})</span>`;
+  if (pending > 0) chips += `<span class="meta-chip pipeline-warn">待处理 ${numberFmt(pending)}</span>`;
+  if (p.failed_jobs > 0) chips += `<span class="meta-chip pipeline-error">失败 ${numberFmt(p.failed_jobs)}</span>`;
+  return chips;
+}
+
+function pipelineLag(p) {
+  if (!p || !p.latest_data || !p.server_time) return 0;
+  const latest = new Date(p.latest_data.replace(' ', 'T') + '+08:00');
+  const server = new Date(p.server_time.replace(' ', 'T') + '+08:00');
+  return Math.max(0, Math.floor((server - latest) / 1000));
+}
+
 function renderHero() {
   const status = state.status;
   if (state.selectedView === 'interfaceTraffic') {
@@ -509,7 +531,7 @@ function renderHero() {
     <span class="meta-chip">累计请求 ${numberFmt(totalRequests)}</span>
     <span class="meta-chip">累计流量 ${bytesFmt(totalTraffic)}</span>
     <span class="meta-chip">累计 Token ${numberFmt(totalTokens)}</span>
-    <span class="meta-chip">待解析 ${status && status.pending_segments ? status.pending_segments : 0}</span>
+    ${pipelineChips()}
   `;
 }
 
@@ -959,6 +981,7 @@ async function refreshCommonData() {
     settledRequest('状态', '/api/status'),
     settledRequest('汇总', '/api/summary'),
     settledRequest('厂商域名', '/api/targets'),
+    settledRequest('管道', '/api/pipeline'),
   ]);
 
   if (results[0].status === 'fulfilled') {
@@ -981,6 +1004,10 @@ async function refreshCommonData() {
     setLoadError('厂商域名', false);
   } else {
     setLoadError('厂商域名', true);
+  }
+
+  if (results[3] && results[3].status === 'fulfilled') {
+    state.pipeline = results[3].value.data;
   }
 
   state.loadedViews.common = true;

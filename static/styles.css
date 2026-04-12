@@ -593,3 +593,8 @@ tbody tr:hover {
     min-width: 0;
   }
 }
+
+/* Pipeline status chips */
+.meta-chip.pipeline-ok { background: #e8f5e9; color: #2e7d32; }
+.meta-chip.pipeline-warn { background: #fff3e0; color: #e65100; }
+.meta-chip.pipeline-error { background: #fce4ec; color: #c62828; }

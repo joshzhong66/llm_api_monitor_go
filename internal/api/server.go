@@ -55,6 +55,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/transport-events", s.handleTransportEvents)
 	s.mux.HandleFunc("/api/targets", s.handleTargets)
 	s.mux.HandleFunc("/api/jobs", s.handleJobs)
+	s.mux.HandleFunc("/api/pipeline", s.handlePipeline)
 	s.mux.HandleFunc("/api/interface-traffic", s.handleInterfaceTraffic)
 
 	// Static files
@@ -281,6 +282,23 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()}, 500)
 		return
 	}
+	s.jsonResponse(w, map[string]interface{}{"ok": true, "data": data}, 200)
+}
+
+func (s *Server) handlePipeline(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	data, err := s.store.QueryPipelineStatus()
+	if err != nil {
+		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()}, 500)
+		return
+	}
+	now := time.Now().UTC().Add(8 * time.Hour).Format("2006-01-02 15:04:05")
+	data["server_time"] = now
+	data["uptime"] = time.Since(s.started).Truncate(time.Second).String()
+	data["active_sessions"] = s.engine.ActiveSessions()
 	s.jsonResponse(w, map[string]interface{}{"ok": true, "data": data}, 200)
 }
 

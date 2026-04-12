@@ -253,6 +253,57 @@ func (s *Store) ClaimQueuedJob(workerName string) (*model.CaptureJob, error) {
 	return &j, nil
 }
 
+// QueryPipelineStatus returns the parsing pipeline progress.
+func (s *Store) QueryPipelineStatus() (map[string]interface{}, error) {
+	rows, err := s.DB.Query(`SELECT analysis_status, COUNT(*) AS c,
+		MIN(started_at) AS earliest, MAX(started_at) AS latest
+		FROM capture_jobs GROUP BY analysis_status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	stages := make([]map[string]interface{}, 0)
+	var totalJobs, mergedJobs, failedJobs int
+	for rows.Next() {
+		var status, earliest, latest string
+		var count int
+		if err := rows.Scan(&status, &count, &earliest, &latest); err != nil {
+			return nil, err
+		}
+		stages = append(stages, map[string]interface{}{
+			"status": status, "count": count,
+			"earliest": earliest, "latest": latest,
+		})
+		totalJobs += count
+		if status == "merged" {
+			mergedJobs = count
+		}
+		if status == "failed" {
+			failedJobs = count
+		}
+	}
+
+	var latestData sql.NullString
+	_ = s.DB.QueryRow("SELECT MAX(last_seen) FROM api_logs").Scan(&latestData)
+
+	pending := totalJobs - mergedJobs - failedJobs
+	pct := 0
+	if totalJobs > 0 {
+		pct = mergedJobs * 100 / totalJobs
+	}
+
+	return map[string]interface{}{
+		"stages":       stages,
+		"total_jobs":   totalJobs,
+		"merged_jobs":  mergedJobs,
+		"failed_jobs":  failedJobs,
+		"pending_jobs": pending,
+		"progress_pct": pct,
+		"latest_data":  latestData.String,
+	}, nil
+}
+
 // UpdateJob updates the final status after merge.
 func (s *Store) UpdateJob(jobID int64, finishedAt string, packetCount int, status, message, startedAt string) error {
 	_, err := s.DB.Exec(`UPDATE capture_jobs SET
