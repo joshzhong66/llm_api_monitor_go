@@ -34,11 +34,11 @@ var DefaultPricingSelections = map[string]struct {
 }{
 	"ChatGPT / OpenAI":  {"Azure OpenAI", "OpenAI", "gpt-5.4"},
 	"Azure OpenAI":      {"Azure OpenAI", "OpenAI", "gpt-5.4"},
-	"Claude / Anthropic": {"AWS Claude", "Anthropic", "claude-sonnet-4-6"},
-	"Gemini / Google AI": {"Vertex AI", "Google Cloud", "gemini-3-flash-preview"},
-	"MiniMax":            {"MiniMax", "MiniMax", "MiniMax-M2.5"},
+	"Claude / Anthropic": {"AWS Claude", "Anthropic", "claude-opus-4-6"},
+	"Gemini / Google AI": {"Vertex AI", "Google Cloud", "gemini-3.1-pro-preview"},
+	"MiniMax":            {"MiniMax", "MiniMax", "MiniMax-M2.7"},
 	"\u667a\u8c31":       {"\u667a\u8c31 GLM-4V", "BigModel", "glm-5"},
-	"\u5343\u95ee / \u901a\u4e49": {"\u963f\u91cc\u4e91\u767e\u70bc", "Alibaba", "qwen3.5-flash"},
+	"\u5343\u95ee / \u901a\u4e49": {"\u963f\u91cc\u4e91\u767e\u70bc", "Alibaba", "qwen3.5-plus"},
 }
 
 var globalCatalog PricingCatalog

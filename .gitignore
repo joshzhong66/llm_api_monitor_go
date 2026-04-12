@@ -21,6 +21,7 @@ data/
 logs/
 captures/
 *.pcap
+scripts/.ldap_env
 
 # Vim swap
 *.swp

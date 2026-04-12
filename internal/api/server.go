@@ -42,6 +42,11 @@ func NewServer(cfg *config.Config, store *db.Store, engine *parser.Engine) *Serv
 	return s
 }
 
+// LookupIP returns the IPUserEntry for an IP.
+func (s *Server) LookupIP(ip string) *IPUserEntry {
+	return s.ipUsers.Lookup(ip)
+}
+
 func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/status", s.handleStatus)
 	s.mux.HandleFunc("/api/logs", s.handleLogs)

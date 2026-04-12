@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"llm_api_monitor/internal/capture"
@@ -19,6 +20,7 @@ type Daemon struct {
 	store    *db.Store
 	engine   *parser.Engine
 	resultCh <-chan *WorkerResult
+	ipLookup func(ip string) (user, hostname, dept string)
 }
 
 // WorkerResult carries the parsed data from a worker to the writer.
@@ -29,12 +31,14 @@ type WorkerResult struct {
 }
 
 // NewDaemon creates a writer daemon.
-func NewDaemon(cfg *config.Config, store *db.Store, engine *parser.Engine, resultCh <-chan *WorkerResult) *Daemon {
+func NewDaemon(cfg *config.Config, store *db.Store, engine *parser.Engine, resultCh <-chan *WorkerResult,
+	ipLookup func(ip string) (user, hostname, dept string)) *Daemon {
 	return &Daemon{
 		cfg:      cfg,
 		store:    store,
 		engine:   engine,
 		resultCh: resultCh,
+		ipLookup: ipLookup,
 	}
 }
 
@@ -77,6 +81,20 @@ func (d *Daemon) processResult(wr *WorkerResult) error {
 	expiredRows := d.engine.ExpireIdleSessions(currentEpoch)
 
 	allRows := append(touchedRows, expiredRows...)
+
+	// Enrich with IP-user mapping before writing to DB
+	if d.ipLookup != nil {
+		for _, r := range allRows {
+			if r.SrcUser == "" {
+				r.SrcUser, r.SrcHostname, r.SrcDepartment = d.ipLookup(r.SrcIP)
+			}
+		}
+		for _, r := range stats.RequestLogs {
+			if r.SrcUser == "" {
+				r.SrcUser, r.SrcHostname, r.SrcDepartment = d.ipLookup(r.SrcIP)
+			}
+		}
+	}
 
 	if err := d.store.UpsertSessions(jobID, allRows); err != nil {
 		log.Printf("[writer] upsert sessions error: %v", err)
@@ -134,14 +152,21 @@ func NewWorkerPool(cfg *config.Config, engine *parser.Engine, store *db.Store,
 // Run starts all workers. Blocks until ctx is cancelled.
 func (wp *WorkerPool) Run(ctx context.Context) {
 	log.Printf("[workers] starting %d parser workers", wp.workers)
-	done := make(chan struct{}, wp.workers)
+	done := make(chan struct{}, wp.workers+1) // +1 for backfill
 	for i := 0; i < wp.workers; i++ {
 		go func(id int) {
 			defer func() { done <- struct{}{} }()
 			wp.worker(ctx, id)
 		}(i)
 	}
-	for i := 0; i < wp.workers; i++ {
+
+	// Backfill goroutine: process queued jobs from DB
+	go func() {
+		defer func() { done <- struct{}{} }()
+		wp.backfillLoop(ctx)
+	}()
+
+	for i := 0; i < wp.workers+1; i++ {
 		<-done
 	}
 	log.Printf("[workers] all workers stopped")
@@ -228,4 +253,81 @@ func (wp *WorkerPool) handleTask(ctx context.Context, task *capture.Task, worker
 		"status":          "queued",
 		"analysis_status": "parsed_ready",
 	})
+}
+
+// backfillLoop claims queued jobs from DB and processes them.
+func (wp *WorkerPool) backfillLoop(ctx context.Context) {
+	log.Printf("[backfill] started — processing queued capture jobs from DB")
+	processed := 0
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		job, err := wp.store.ClaimQueuedJob("go-backfill")
+		if err != nil {
+			log.Printf("[backfill] claim error: %v", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		if job == nil {
+			// No more queued jobs
+			if processed > 0 {
+				log.Printf("[backfill] finished — processed %d jobs, no more queued", processed)
+			}
+			// Poll every 30s in case new queued jobs appear
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(30 * time.Second):
+				continue
+			}
+		}
+
+		// Check pcap file exists
+		if _, err := os.Stat(job.PcapPath); err != nil {
+			log.Printf("[backfill] pcap missing, skip: %s", job.PcapPath)
+			_ = wp.store.UpdateJobStatus(job.ID, map[string]interface{}{
+				"status": "failed", "analysis_status": "failed",
+				"message": "pcap file not found",
+			})
+			continue
+		}
+
+		// Parse with gopacket
+		result, err := wp.engine.ParsePcap(job.PcapPath)
+		if err != nil {
+			log.Printf("[backfill] parse error %s: %v", job.PcapPath, err)
+			_ = wp.store.UpdateJobStatus(job.ID, map[string]interface{}{
+				"status": "failed", "analysis_status": "failed",
+				"message": err.Error(),
+			})
+			continue
+		}
+
+		result.JobID = job.ID
+		result.QueueName = job.QueueName
+		result.WorkerName = "go-backfill"
+
+		// Send to writer via channel
+		select {
+		case wp.resultCh <- &WorkerResult{
+			ParseResult: result,
+			JobID:       job.ID,
+			PcapPath:    job.PcapPath,
+		}:
+		case <-ctx.Done():
+			return
+		}
+
+		_ = wp.store.UpdateJobStatus(job.ID, map[string]interface{}{
+			"status":          "queued",
+			"analysis_status": "parsed_ready",
+		})
+
+		processed++
+		if processed%50 == 0 {
+			log.Printf("[backfill] progress: %d jobs processed", processed)
+		}
+	}
 }

@@ -1,0 +1,4 @@
+LDAP_URL='ldap://10.20.3.85:389'
+LDAP_BIND_DN='ldap-ssp@xmfunny.com'
+LDAP_BIND_PASSWORD='replace_me'
+LDAP_BASE_DN='DC=xmfunny,DC=com'

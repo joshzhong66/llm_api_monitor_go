@@ -125,7 +125,15 @@ func main() {
 	go workerPool.Run(ctx)
 
 	// 2. Writer daemon (reads results, merges into sessions, writes to DB)
-	writerDaemon := writer.NewDaemon(cfg, store, engine, resultCh)
+	apiServer := api.NewServer(cfg, store, engine)
+	ipLookup := func(ip string) (string, string, string) {
+		entry := apiServer.LookupIP(ip)
+		if entry == nil {
+			return "", "", ""
+		}
+		return entry.Username, entry.Hostname, entry.Department
+	}
+	writerDaemon := writer.NewDaemon(cfg, store, engine, resultCh, ipLookup)
 	go func() {
 		if err := writerDaemon.Run(ctx); err != nil {
 			log.Printf("[writer] fatal: %v", err)
@@ -142,8 +150,7 @@ func main() {
 		}()
 	}
 
-	// 4. HTTP API server
-	apiServer := api.NewServer(cfg, store, engine)
+	// 4. HTTP API server (apiServer already created above for ipLookup)
 	go func() {
 		if err := apiServer.ListenAndServe(); err != nil {
 			if ctx.Err() == nil {

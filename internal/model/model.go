@@ -28,6 +28,11 @@ type Session struct {
 	FirstSeenEpoch float64 `json:"-"`
 	LastSeenEpoch  float64 `json:"-"`
 	PendingRequest *RequestLog `json:"-"`
+
+	// IP-user mapping (persisted)
+	SrcUser       string `json:"src_user,omitempty" db:"src_user"`
+	SrcHostname   string `json:"src_hostname,omitempty" db:"src_hostname"`
+	SrcDepartment string `json:"src_department,omitempty" db:"src_department"`
 }
 
 // RequestLog represents a single request within a session (maps to request_logs table).
@@ -48,6 +53,11 @@ type RequestLog struct {
 	DownlinkBytes int64  `json:"downlink_bytes" db:"downlink_bytes"`
 	TotalBytes    int64  `json:"total_bytes" db:"total_bytes"`
 	RequestCount  int    `json:"request_count" db:"request_count"`
+
+	// IP-user mapping
+	SrcUser       string `json:"src_user,omitempty" db:"src_user"`
+	SrcHostname   string `json:"src_hostname,omitempty" db:"src_hostname"`
+	SrcDepartment string `json:"src_department,omitempty" db:"src_department"`
 }
 
 // TransportEvent represents a low-level transport event (maps to transport_events table).

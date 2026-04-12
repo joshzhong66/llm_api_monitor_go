@@ -221,6 +221,38 @@ func (s *Store) UpdateJobStatus(jobID int64, fields map[string]interface{}) erro
 	return err
 }
 
+// ClaimQueuedJob atomically claims one queued job for backfill processing.
+// Returns nil if no queued jobs remain.
+func (s *Store) ClaimQueuedJob(workerName string) (*model.CaptureJob, error) {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var j model.CaptureJob
+	err = tx.QueryRow(`SELECT id, iface, window_seconds, bpf_filter, COALESCE(pcap_path,''),
+		started_at, COALESCE(finished_at,''), packet_count, status, queue_name
+		FROM capture_jobs
+		WHERE analysis_status = 'queued' AND status = 'queued'
+		ORDER BY started_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(
+		&j.ID, &j.Iface, &j.WindowSeconds, &j.BPFFilter, &j.PcapPath,
+		&j.StartedAt, &j.FinishedAt, &j.PacketCount, &j.Status, &j.QueueName)
+	if err != nil {
+		return nil, nil // no queued jobs
+	}
+
+	_, err = tx.Exec(`UPDATE capture_jobs SET analysis_status='parsing', status='parsing', worker_name=? WHERE id=?`,
+		workerName, j.ID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &j, nil
+}
+
 // UpdateJob updates the final status after merge.
 func (s *Store) UpdateJob(jobID int64, finishedAt string, packetCount int, status, message, startedAt string) error {
 	_, err := s.DB.Exec(`UPDATE capture_jobs SET
@@ -246,8 +278,9 @@ func (s *Store) UpsertSessions(jobID int64, rows []*model.Session) error {
 	stmt, err := tx.Prepare(`INSERT INTO api_logs
 		(capture_job_id, iface, src_ip, src_port, dst_ip, dst_port,
 		 first_seen, vendor, domain, uplink_bytes, downlink_bytes, total_bytes,
-		 request_count, packet_count, session_key, last_seen, updated_at, closed_at, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 request_count, packet_count, session_key, last_seen, updated_at, closed_at, status,
+		 src_user, src_hostname, src_department)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
 		capture_job_id = VALUES(capture_job_id),
 		uplink_bytes = VALUES(uplink_bytes),
@@ -258,7 +291,10 @@ func (s *Store) UpsertSessions(jobID int64, rows []*model.Session) error {
 		last_seen = VALUES(last_seen),
 		updated_at = VALUES(updated_at),
 		closed_at = VALUES(closed_at),
-		status = VALUES(status)`)
+		status = VALUES(status),
+		src_user = COALESCE(NULLIF(VALUES(src_user),''), src_user),
+		src_hostname = COALESCE(NULLIF(VALUES(src_hostname),''), src_hostname),
+		src_department = COALESCE(NULLIF(VALUES(src_department),''), src_department)`)
 	if err != nil {
 		return err
 	}
@@ -267,7 +303,8 @@ func (s *Store) UpsertSessions(jobID int64, rows []*model.Session) error {
 	for _, r := range rows {
 		_, err := stmt.Exec(jobID, r.Iface, r.SrcIP, r.SrcPort, r.DstIP, r.DstPort,
 			r.FirstSeen, r.Vendor, r.Domain, r.UplinkBytes, r.DownlinkBytes, r.TotalBytes,
-			r.RequestCount, r.PacketCount, r.SessionKey, r.LastSeen, r.UpdatedAt, r.ClosedAt, r.Status)
+			r.RequestCount, r.PacketCount, r.SessionKey, r.LastSeen, r.UpdatedAt, r.ClosedAt, r.Status,
+			r.SrcUser, r.SrcHostname, r.SrcDepartment)
 		if err != nil {
 			return err
 		}
@@ -289,12 +326,16 @@ func (s *Store) InsertRequestLogs(jobID int64, rows []*model.RequestLog) error {
 	stmt, err := tx.Prepare(`INSERT INTO request_logs
 		(capture_job_id, request_key, session_key, iface, src_ip, src_port,
 		 dst_ip, dst_port, seen_at, vendor, domain,
-		 uplink_bytes, downlink_bytes, total_bytes, request_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 uplink_bytes, downlink_bytes, total_bytes, request_count,
+		 src_user, src_hostname, src_department)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
 		uplink_bytes = VALUES(uplink_bytes),
 		downlink_bytes = VALUES(downlink_bytes),
-		total_bytes = VALUES(total_bytes)`)
+		total_bytes = VALUES(total_bytes),
+		src_user = COALESCE(NULLIF(VALUES(src_user),''), src_user),
+		src_hostname = COALESCE(NULLIF(VALUES(src_hostname),''), src_hostname),
+		src_department = COALESCE(NULLIF(VALUES(src_department),''), src_department)`)
 	if err != nil {
 		return err
 	}
@@ -305,7 +346,8 @@ func (s *Store) InsertRequestLogs(jobID int64, rows []*model.RequestLog) error {
 		_, err := stmt.Exec(r.CaptureJobID, r.RequestKey, r.SessionKey,
 			r.Iface, r.SrcIP, r.SrcPort, r.DstIP, r.DstPort,
 			r.SeenAt, r.Vendor, r.Domain,
-			r.UplinkBytes, r.DownlinkBytes, r.TotalBytes, r.RequestCount)
+			r.UplinkBytes, r.DownlinkBytes, r.TotalBytes, r.RequestCount,
+			r.SrcUser, r.SrcHostname, r.SrcDepartment)
 		if err != nil {
 			return err
 		}

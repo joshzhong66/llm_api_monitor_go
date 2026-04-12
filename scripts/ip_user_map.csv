@@ -125,7 +125,7 @@ ip,hostname,username,department
 10.30.20.208,ss-weilingqiang,weilingqiang,SS
 10.30.53.159,wll-wanghaibo,wanghaibo,WLL
 10.30.60.88,ss-wangzhelun,wangzhelun,SS
-10.60.0.17,wll-yukejinxm,yukejinxm,WLL
+192.168.1.11,wll-yukejinxm,yukejinxm,WLL
 10.30.20.28,ss-yanglingying,yanglingying,SS
 10.30.40.166,od-wangdaoyuan,wangdaoyuan,OD
 10.41.1.156,tmc-zhoujixiong01,zhoujixiong01,TMC
@@ -142,7 +142,7 @@ ip,hostname,username,department
 10.30.20.69,ss-liushaohua01,liushaohua01,SS
 10.30.30.197,ss-dujinwei,dujinwei,SS
 10.30.30.135,rc-wuxilin,wuxilin,RC
-10.41.6.6,ss-lijianghui,lijianghui,SS
+10.30.30.25,ss-lijianghui,lijianghui,SS
 10.30.20.11,wll-wangjunjie,wangjunjie,WLL
 10.30.20.161,xcpd-zhengpeifan,zhengpeifan,XCPD
 10.30.30.109,rc-yanning,yanning,RC
@@ -154,7 +154,7 @@ ip,hostname,username,department
 10.30.30.131,ss-huangjingya,huangjingya,SS
 10.30.20.34,ss-linbaizhao,linbaizhao,SS
 10.30.30.167,ss-luozhenhuai,luozhenhuai,SS
-10.20.3.37,mmorpg-nas,nas,MMORPG
+10.20.3.38,mmorpg-nas,nas,MMORPG
 10.30.30.73,ss-zhanghaisong,zhanghaisong,SS
 10.30.40.158,ss-jichengeng,jichengeng,SS
 172.16.22.61,mmorpg-ab,ab,MMORPG
@@ -394,7 +394,7 @@ ip,hostname,username,department
 10.30.30.127,es-zhangyating,zhangyating,ES
 10.41.1.246,tmc-xiefeng,xiefeng,TMC
 10.30.30.13,ss-zengnb,zengnb,SS
-10.30.60.167,ss-ad-wuchangjun,ad-wuchangjun,SS
+192.168.206.57,ss-ad-wuchangjun,ad-wuchangjun,SS
 10.41.2.30,hr-zhangzhiye,zhangzhiye,HR
 10.30.30.168,ss-wangbaisong,wangbaisong,SS
 10.30.40.185,cslite-zenghong,zenghong,CSLITE

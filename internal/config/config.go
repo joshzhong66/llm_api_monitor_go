@@ -147,13 +147,13 @@ func Load(envPath string) *Config {
 		OutputTokenCostCNY: 0.000003,
 		USDCNYRate:         envFloat("LLM_MONITOR_USD_CNY_RATE", 6.89),
 
-		ProxyInputTotalTokensPerUplinkByte:    envFloat("LLM_PROXY_INPUT_TOTAL_TOKENS_PER_UPLINK_BYTE", 0.302201953956),
-		ProxyCacheReadTokensPerUplinkByte:     envFloat("LLM_PROXY_CACHE_READ_TOKENS_PER_UPLINK_BYTE", 0.297338844669),
-		ProxyUncachedInputTokensPerUplinkByte: envFloat("LLM_PROXY_UNCACHED_INPUT_TOKENS_PER_UPLINK_BYTE", 0.004863109287),
-		ProxyOutputTokensPerDownlinkByte:      envFloat("LLM_PROXY_OUTPUT_TOKENS_PER_DOWNLINK_BYTE", 0.003976790137),
-		ProxyInputTokenCostUSD:                envFloat("LLM_PROXY_INPUT_TOKEN_COST_USD", 0.0000025),
-		ProxyCacheReadBillingMultiplier:        envFloat("LLM_PROXY_CACHE_READ_BILLING_MULTIPLIER", 0.1),
-		ProxyOutputTokenCostUSD:               envFloat("LLM_PROXY_OUTPUT_TOKEN_COST_USD", 0.000015),
+		ProxyInputTotalTokensPerUplinkByte:    envFloat("LLM_PROXY_INPUT_TOTAL_TOKENS_PER_UPLINK_BYTE", 0.203806889514),
+		ProxyCacheReadTokensPerUplinkByte:     envFloat("LLM_PROXY_CACHE_READ_TOKENS_PER_UPLINK_BYTE", 0.168743644119),
+		ProxyUncachedInputTokensPerUplinkByte: envFloat("LLM_PROXY_UNCACHED_INPUT_TOKENS_PER_UPLINK_BYTE", 0.035063245394),
+		ProxyOutputTokensPerDownlinkByte:      envFloat("LLM_PROXY_OUTPUT_TOKENS_PER_DOWNLINK_BYTE", 0.004718444333),
+		ProxyInputTokenCostUSD:                envFloat("LLM_PROXY_INPUT_TOKEN_COST_USD", 0.000003138268266),
+		ProxyCacheReadBillingMultiplier:       envFloat("LLM_PROXY_CACHE_READ_BILLING_MULTIPLIER", 1.0),
+		ProxyOutputTokenCostUSD:               envFloat("LLM_PROXY_OUTPUT_TOKEN_COST_USD", 0.000018829609595),
 
 		PricingXLSXPath: envStr("LLM_MONITOR_PRICING_XLSX", "official_model_pricing_usd.xlsx"),
 
