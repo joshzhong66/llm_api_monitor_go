@@ -689,7 +689,7 @@ function renderSessionLogs() {
   const body = document.getElementById('sessionLogBody');
   document.getElementById('sessionSearchMeta').textContent = `${detailMetaText(payload, state.search.sessions, true)}，时间范围 ${timeRangeLabel(state.timeRanges.sessions)}`;
   if (!rows.length) {
-    body.innerHTML = '<tr><td class="empty-cell" colspan="15">当前筛选条件下暂无会话日志</td></tr>';
+    body.innerHTML = '<tr><td class="empty-cell" colspan="16">当前筛选条件下暂无会话日志</td></tr>';
     renderPagination('sessionPagination', payload, 'session', page => changePage(state.selectedView, page));
     return;
   }
@@ -697,6 +697,7 @@ function renderSessionLogs() {
     <tr>
       <td>${escapeHtml(row.iface)}</td>
       <td class="mono">${escapeHtml(row.src_ip)}</td>
+      <td>${escapeHtml(row.src_user || '-')}</td>
       <td>${escapeHtml(row.first_seen || '-')}</td>
       <td>${escapeHtml(row.last_seen || '-')}</td>
       <td>${escapeHtml(channelLabel(row.channel_type))}</td>
@@ -727,7 +728,7 @@ function renderRequestLogs() {
   document.getElementById('requestSearchMeta').textContent = `${detailMetaText(payload, state.search.requests, true)}，时间范围 ${timeRangeLabel(state.timeRanges.requests)}`;
   document.getElementById('requestLatencyHint').textContent = requestPanelHintText(state.status, state.search.requests);
   if (!rows.length) {
-    body.innerHTML = '<tr><td class="empty-cell" colspan="14">当前筛选条件下暂无请求明细</td></tr>';
+    body.innerHTML = '<tr><td class="empty-cell" colspan="15">当前筛选条件下暂无请求明细</td></tr>';
     renderPagination('requestPagination', payload, 'request', page => changePage(state.selectedView, page));
     return;
   }
@@ -735,6 +736,7 @@ function renderRequestLogs() {
     <tr>
       <td>${escapeHtml(row.iface)}</td>
       <td class="mono">${escapeHtml(row.src_ip)}</td>
+      <td>${escapeHtml(row.src_user || '-')}</td>
       <td>${escapeHtml(row.seen_at || '-')}</td>
       <td>${escapeHtml(channelLabel(row.channel_type))}</td>
       <td><span class="vendor-tag">${escapeHtml(row.vendor)}</span></td>

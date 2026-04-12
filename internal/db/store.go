@@ -827,9 +827,9 @@ func buildLogFilters(vendor, search, channelClass string, timeWindowMinutes int)
 		args = append(args, vendor)
 	}
 	if search != "" {
-		clauses = append(clauses, "(iface LIKE ? OR src_ip LIKE ? OR vendor LIKE ? OR domain LIKE ? OR first_seen LIKE ? OR COALESCE(last_seen,'') LIKE ?)")
+		clauses = append(clauses, "(iface LIKE ? OR src_ip LIKE ? OR vendor LIKE ? OR domain LIKE ? OR first_seen LIKE ? OR COALESCE(last_seen,'') LIKE ? OR COALESCE(src_user,'') LIKE ? OR COALESCE(src_hostname,'') LIKE ?)")
 		s := "%" + search + "%"
-		args = append(args, s, s, s, s, s, s)
+		args = append(args, s, s, s, s, s, s, s, s)
 	}
 	applyChannelClass(&clauses, &args, "domain", channelClass)
 	applyTimeWindow(&clauses, &args, "capture_job_id", timeWindowMinutes)
@@ -849,9 +849,9 @@ func buildRequestLogFilters(vendor, search, channelClass string, timeWindowMinut
 		args = append(args, vendor)
 	}
 	if search != "" {
-		clauses = append(clauses, "(iface LIKE ? OR src_ip LIKE ? OR vendor LIKE ? OR domain LIKE ? OR seen_at LIKE ?)")
+		clauses = append(clauses, "(iface LIKE ? OR src_ip LIKE ? OR vendor LIKE ? OR domain LIKE ? OR seen_at LIKE ? OR COALESCE(src_user,'') LIKE ? OR COALESCE(src_hostname,'') LIKE ?)")
 		s := "%" + search + "%"
-		args = append(args, s, s, s, s, s)
+		args = append(args, s, s, s, s, s, s, s)
 	}
 	applyChannelClass(&clauses, &args, "domain", channelClass)
 	applyTimeWindow(&clauses, &args, "capture_job_id", timeWindowMinutes)
