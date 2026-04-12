@@ -598,14 +598,14 @@ func (s *Store) QuerySummary(startDate, endDate string) ([]map[string]interface{
 			latest = latestSeen.String
 		}
 		results = append(results, map[string]interface{}{
-			"vendor":        vendor,
-			"domain":        domain,
-			"session_count": sessionCount,
-			"uplink_bytes":  totalUplink,
+			"vendor":         vendor,
+			"domain":         domain,
+			"session_count":  sessionCount,
+			"uplink_bytes":   totalUplink,
 			"downlink_bytes": totalDownlink,
-			"total_bytes":   totalBytes,
-			"request_count": totalRequests,
-			"latest_seen":   latest,
+			"total_bytes":    totalBytes,
+			"request_count":  totalRequests,
+			"latest_seen":    latest,
 		})
 	}
 	// Sort: rows with latest_seen first (by time desc), then idle rows
@@ -791,7 +791,7 @@ func (s *Store) QueryAllTargetRules() ([]map[string]interface{}, error) {
 		vendorMap[vendor] = append(vendorMap[vendor], map[string]interface{}{
 			"id": id, "domain_pattern": domainPattern,
 			"match_type": matchType, "source": source,
-			"enabled": enabled == 1,
+			"enabled":    enabled == 1,
 			"created_at": createdAt, "updated_at": updatedAt,
 		})
 	}
@@ -837,7 +837,7 @@ func (s *Store) AddTargetRules(vendor string, domains []string, matchType string
 
 // WebDomainHints are domains classified as "web" (browser) traffic.
 var WebDomainHints = []string{
-	"aistudio.google.com", "chat.openai.com", "chatgpt.com", "claude.ai",
+	"aistudio.google.com", "claude.ai",
 	"gemini.google.com", "grok.com", "kimi.com", "kimi.moonshot.cn",
 	"platform.deepseek.com", "qwen.ai", "tongyi.aliyun.com",
 }

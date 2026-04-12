@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -102,18 +103,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	uptime := time.Since(s.started).Truncate(time.Second).String()
 	data := map[string]interface{}{
-		"running":           true,
-		"capture_running":   true,
-		"parser_running":    true,
-		"iface":             s.cfg.Iface,
-		"window_seconds":    s.cfg.WindowSeconds,
-		"bpf_filter":        s.cfg.BPFFilter,
-		"pending_segments":  0,
+		"running":            true,
+		"capture_running":    true,
+		"parser_running":     true,
+		"iface":              s.cfg.Iface,
+		"window_seconds":     s.cfg.WindowSeconds,
+		"bpf_filter":         s.cfg.BPFFilter,
+		"pending_segments":   0,
 		"retain_parsed_pcap": s.cfg.RetainParsedPcap,
-		"last_job_id":       s.engine.LastJobID(),
-		"active_sessions":   s.engine.ActiveSessions(),
-		"uptime":            uptime,
-		"started_at":        s.started.UTC().Add(8 * time.Hour).Format("2006-01-02 15:04:05"),
+		"last_job_id":        s.engine.LastJobID(),
+		"active_sessions":    s.engine.ActiveSessions(),
+		"uptime":             uptime,
+		"started_at":         s.started.UTC().Add(8 * time.Hour).Format("2006-01-02 15:04:05"),
 	}
 	s.jsonResponse(w, map[string]interface{}{"ok": true, "data": data}, 200)
 }
@@ -174,6 +175,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	for _, item := range data {
 		enrichUsageMetrics(item, s.cfg)
 	}
+	sortSummaryRowsByConsumption(data)
 
 	s.jsonResponse(w, map[string]interface{}{"ok": true, "data": data}, 200)
 }
@@ -212,6 +214,42 @@ func (s *Server) handleRequestLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.jsonResponse(w, map[string]interface{}{"ok": true, "data": result}, 200)
+}
+
+func sortSummaryRowsByConsumption(rows []map[string]interface{}) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		leftCost := toFloat64(rows[i]["estimated_cost_usd"])
+		rightCost := toFloat64(rows[j]["estimated_cost_usd"])
+		if leftCost != rightCost {
+			return leftCost > rightCost
+		}
+
+		leftBytes := toFloat64(rows[i]["total_bytes"])
+		rightBytes := toFloat64(rows[j]["total_bytes"])
+		if leftBytes != rightBytes {
+			return leftBytes > rightBytes
+		}
+
+		leftTokens := toFloat64(rows[i]["total_tokens"])
+		rightTokens := toFloat64(rows[j]["total_tokens"])
+		if leftTokens != rightTokens {
+			return leftTokens > rightTokens
+		}
+
+		leftSeen := toString(rows[i]["latest_seen"])
+		rightSeen := toString(rows[j]["latest_seen"])
+		if leftSeen != rightSeen {
+			return leftSeen > rightSeen
+		}
+
+		leftVendor := toString(rows[i]["vendor"])
+		rightVendor := toString(rows[j]["vendor"])
+		if leftVendor != rightVendor {
+			return leftVendor < rightVendor
+		}
+
+		return toString(rows[i]["domain"]) < toString(rows[j]["domain"])
+	})
 }
 
 func (s *Server) handleTransportEvents(w http.ResponseWriter, r *http.Request) {
@@ -481,4 +519,21 @@ func toString(v interface{}) string {
 		return s
 	}
 	return fmt.Sprintf("%v", v)
+}
+
+func toFloat64(v interface{}) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int64:
+		return float64(val)
+	case int:
+		return float64(val)
+	case string:
+		n, _ := strconv.ParseFloat(val, 64)
+		return n
+	}
+	return 0
 }

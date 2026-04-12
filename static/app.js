@@ -21,7 +21,7 @@ const ORDERED_VENDORS = [
 
 const NAV_ITEMS = [
   {id: 'apiSummary', label: 'API 消费汇总'},
-  {id: 'webSummary', label: '网页版流量'},
+  {id: 'webSummary', label: '网页消费汇总'},
   {id: 'apiSessions', label: 'API 会话日志'},
   {id: 'webSessions', label: '网页会话日志'},
   {id: 'apiRequests', label: 'API 请求明细'},
@@ -403,7 +403,7 @@ function heroStatusText(status) {
 
 function currentViewTitle() {
   if (state.selectedView === 'apiSummary') return 'API 消费汇总';
-  if (state.selectedView === 'webSummary') return '网页版流量';
+  if (state.selectedView === 'webSummary') return '网页消费汇总';
   if (state.selectedView === 'apiSessions') return 'API 会话日志';
   if (state.selectedView === 'webSessions') return '网页会话日志';
   if (state.selectedView === 'apiRequests') return 'API 请求明细';
@@ -414,7 +414,7 @@ function currentViewTitle() {
 }
 
 function summaryPanelTitle() {
-  return state.selectedView === 'webSummary' ? '网页版流量' : 'API 消费汇总';
+  return state.selectedView === 'webSummary' ? '网页消费汇总' : 'API 消费汇总';
 }
 
 function labelMatchType(value) {

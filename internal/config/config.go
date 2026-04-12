@@ -26,8 +26,8 @@ type Config struct {
 	RetainParsedPcap bool
 	MaxPendingSegs   int
 
-	RealtimeWorkers int
-	BackfillWorkers int
+	RealtimeWorkers         int
+	BackfillWorkers         int
 	BackfillPauseOnRealtime bool
 
 	MySQL MySQLConfig
@@ -47,19 +47,19 @@ type Config struct {
 	IftopMaxFlows      int
 	IftopBinary        string
 
-	InputTokenBits  float64
-	OutputTokenBits float64
+	InputTokenBits     float64
+	OutputTokenBits    float64
 	InputTokenCostCNY  float64
 	OutputTokenCostCNY float64
 	USDCNYRate         float64
 
-	ProxyInputTotalTokensPerUplinkByte   float64
-	ProxyCacheReadTokensPerUplinkByte    float64
+	ProxyInputTotalTokensPerUplinkByte    float64
+	ProxyCacheReadTokensPerUplinkByte     float64
 	ProxyUncachedInputTokensPerUplinkByte float64
-	ProxyOutputTokensPerDownlinkByte     float64
-	ProxyInputTokenCostUSD               float64
-	ProxyCacheReadBillingMultiplier      float64
-	ProxyOutputTokenCostUSD              float64
+	ProxyOutputTokensPerDownlinkByte      float64
+	ProxyInputTokenCostUSD                float64
+	ProxyCacheReadBillingMultiplier       float64
+	ProxyOutputTokenCostUSD               float64
 
 	PricingXLSXPath string
 
@@ -158,17 +158,15 @@ func Load(envPath string) *Config {
 		PricingXLSXPath: envStr("LLM_MONITOR_PRICING_XLSX", "official_model_pricing_usd.xlsx"),
 
 		WebDomainHints: map[string]bool{
-			"chat.openai.com":    true,
-			"chatgpt.com":        true,
-			"claude.ai":          true,
-			"gemini.google.com":  true,
-			"aistudio.google.com": true,
-			"kimi.com":           true,
-			"kimi.moonshot.cn":   true,
+			"claude.ai":             true,
+			"gemini.google.com":     true,
+			"aistudio.google.com":   true,
+			"kimi.com":              true,
+			"kimi.moonshot.cn":      true,
 			"platform.deepseek.com": true,
-			"qwen.ai":            true,
-			"tongyi.aliyun.com":  true,
-			"grok.com":           true,
+			"qwen.ai":               true,
+			"tongyi.aliyun.com":     true,
+			"grok.com":              true,
 		},
 	}
 
