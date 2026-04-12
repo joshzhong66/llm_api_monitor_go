@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"llm_api_monitor/internal/capture"
@@ -21,6 +22,7 @@ type Daemon struct {
 	engine   *parser.Engine
 	resultCh <-chan *WorkerResult
 	ipLookup func(ip string) (user, hostname, dept string)
+	writeMu  sync.Mutex // serialize writer + backfill DB writes
 }
 
 // WorkerResult carries the parsed data from a worker to the writer.
@@ -63,6 +65,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 }
 
 func (d *Daemon) processResult(wr *WorkerResult) error {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
 	jobID := wr.JobID
 
 	_ = d.store.UpdateJobStatus(jobID, map[string]interface{}{
@@ -98,7 +103,6 @@ func (d *Daemon) processResult(wr *WorkerResult) error {
 
 	if err := d.store.UpsertSessions(jobID, allRows); err != nil {
 		log.Printf("[writer] upsert sessions error (will retry): %v", err)
-		// Reset to queued so backfill can retry, don't mark as failed
 		_ = d.store.UpdateJobStatus(jobID, map[string]interface{}{
 			"status":          "queued",
 			"analysis_status": "queued",
@@ -107,13 +111,22 @@ func (d *Daemon) processResult(wr *WorkerResult) error {
 		return err
 	}
 
-	if err := d.store.InsertRequestLogs(jobID, stats.RequestLogs); err != nil {
-		log.Printf("[writer] insert request logs error: %v", err)
-	}
-
-	if err := d.store.InsertTransportEvents(jobID, stats.TransportEvents); err != nil {
-		log.Printf("[writer] insert transport events error: %v", err)
-	}
+	// Write request_logs and transport_events in parallel
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if err := d.store.InsertRequestLogs(jobID, stats.RequestLogs); err != nil {
+			log.Printf("[writer] insert request logs error: %v", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if err := d.store.InsertTransportEvents(jobID, stats.TransportEvents); err != nil {
+			log.Printf("[writer] insert transport events error: %v", err)
+		}
+	}()
+	wg.Wait()
 
 	message := fmt.Sprintf("parsed %d packets, touched %d sessions, requests %d, active %d",
 		stats.PacketCount, len(stats.TouchedSessions), len(stats.RequestLogs), d.engine.ActiveSessions())
