@@ -21,16 +21,20 @@ type Server struct {
 	cfg     *config.Config
 	store   *db.Store
 	engine  *parser.Engine
+	ipUsers *IPUserMap
 	started time.Time
 	mux     *http.ServeMux
 }
 
 // NewServer creates a new API server.
 func NewServer(cfg *config.Config, store *db.Store, engine *parser.Engine) *Server {
+	// IP-user map file: look in scripts/ directory relative to working dir
+	ipMapPath := filepath.Join("scripts", "ip_user_map.json")
 	s := &Server{
 		cfg:     cfg,
 		store:   store,
 		engine:  engine,
+		ipUsers: NewIPUserMap(ipMapPath),
 		started: time.Now(),
 		mux:     http.NewServeMux(),
 	}
@@ -125,10 +129,11 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enrich with token/cost estimates
+	// Enrich with token/cost estimates + IP user mapping
 	if items, ok := result.Items.([]map[string]interface{}); ok {
 		for _, item := range items {
 			enrichUsageMetrics(item, s.cfg)
+			s.ipUsers.EnrichRow(item)
 		}
 	}
 
@@ -178,6 +183,7 @@ func (s *Server) handleRequestLogs(w http.ResponseWriter, r *http.Request) {
 	if items, ok := result.Items.([]map[string]interface{}); ok {
 		for _, item := range items {
 			enrichUsageMetrics(item, s.cfg)
+			s.ipUsers.EnrichRow(item)
 		}
 	}
 
