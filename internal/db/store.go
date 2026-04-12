@@ -496,8 +496,16 @@ func (s *Store) LoadOpenSessions() ([]*model.Session, error) {
 }
 
 // QueryLogs queries api_logs with filtering and pagination.
-func (s *Store) QueryLogs(vendor, search, channelClass string, timeWindowMinutes, page, pageSize int) (*model.PagedResult, error) {
+func (s *Store) QueryLogs(vendor, search, channelClass string, timeWindowMinutes, page, pageSize, minBytes int) (*model.PagedResult, error) {
 	where, args := buildLogFilters(vendor, search, channelClass, timeWindowMinutes)
+	if minBytes > 0 {
+		if where == "" {
+			where = " WHERE downlink_bytes >= ?"
+		} else {
+			where += " AND downlink_bytes >= ?"
+		}
+		args = append(args, minBytes)
+	}
 
 	var total int
 	countSQL := "SELECT COUNT(*) FROM api_logs" + where
@@ -610,8 +618,16 @@ func (s *Store) QuerySummary() ([]map[string]interface{}, error) {
 }
 
 // QueryRequestLogs queries request_logs with filtering and pagination.
-func (s *Store) QueryRequestLogs(vendor, search, channelClass string, timeWindowMinutes, page, pageSize int) (*model.PagedResult, error) {
+func (s *Store) QueryRequestLogs(vendor, search, channelClass string, timeWindowMinutes, page, pageSize, minBytes int) (*model.PagedResult, error) {
 	where, args := buildRequestLogFilters(vendor, search, channelClass, timeWindowMinutes)
+	if minBytes > 0 {
+		if where == "" {
+			where = " WHERE downlink_bytes >= ?"
+		} else {
+			where += " AND downlink_bytes >= ?"
+		}
+		args = append(args, minBytes)
+	}
 
 	var total int
 	if err := s.DB.QueryRow("SELECT COUNT(*) FROM request_logs"+where, args...).Scan(&total); err != nil {

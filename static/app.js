@@ -97,6 +97,10 @@ const state = {
     requests: '',
     quic: '',
   },
+  hideEmpty: {
+    sessions: true,
+    requests: true,
+  },
   pagination: {
     apiSessions: 1,
     webSessions: 1,
@@ -1031,6 +1035,7 @@ function buildViewRequest(view, overrides) {
         channel_class: channelClass,
         time_window_minutes: state.timeRanges[group],
         search: state.search.sessions,
+        min_bytes: state.hideEmpty.sessions ? 1 : 0,
       })}`,
       page,
       pageSize,
@@ -1055,6 +1060,7 @@ function buildViewRequest(view, overrides) {
         channel_class: channelClass,
         time_window_minutes: state.timeRanges[group],
         search: state.search.requests,
+        min_bytes: state.hideEmpty.requests ? 1 : 0,
       })}`,
       page,
       pageSize,
@@ -1229,6 +1235,19 @@ bindSearchInput('summarySearchInput', 'summary');
 bindSearchInput('sessionSearchInput', 'sessions');
 bindSearchInput('requestSearchInput', 'requests');
 bindSearchInput('quicSearchInput', 'quic');
+
+// Hide empty sessions toggle
+function bindHideEmpty(checkboxId, group) {
+  const el = document.getElementById(checkboxId);
+  if (!el) return;
+  el.checked = state.hideEmpty[group];
+  el.addEventListener('change', function() {
+    state.hideEmpty[group] = el.checked;
+    refreshAll(true).catch(() => renderAll());
+  });
+}
+bindHideEmpty('sessionHideEmpty', 'sessions');
+bindHideEmpty('requestHideEmpty', 'requests');
 
 renderAll();
 refreshAll().catch(() => renderAll());

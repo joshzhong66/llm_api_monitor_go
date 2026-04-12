@@ -128,8 +128,9 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	search := q.Get("search")
 	channelClass := q.Get("channel_class")
 	timeWindow := queryInt(q, "time_window_minutes", 0)
+	minBytes := queryInt(q, "min_bytes", 0)
 
-	result, err := s.store.QueryLogs(vendor, search, channelClass, timeWindow, page, pageSize)
+	result, err := s.store.QueryLogs(vendor, search, channelClass, timeWindow, page, pageSize, minBytes)
 	if err != nil {
 		log.Printf("[api] query logs error: %v", err)
 		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()}, 500)
@@ -179,8 +180,9 @@ func (s *Server) handleRequestLogs(w http.ResponseWriter, r *http.Request) {
 	search := q.Get("search")
 	channelClass := q.Get("channel_class")
 	timeWindow := queryInt(q, "time_window_minutes", 0)
+	minBytes := queryInt(q, "min_bytes", 0)
 
-	result, err := s.store.QueryRequestLogs(vendor, search, channelClass, timeWindow, page, pageSize)
+	result, err := s.store.QueryRequestLogs(vendor, search, channelClass, timeWindow, page, pageSize, minBytes)
 	if err != nil {
 		log.Printf("[api] query request logs error: %v", err)
 		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()}, 500)

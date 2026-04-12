@@ -100,7 +100,8 @@
             <h3 id="sessionPanelTitle">API 会话日志</h3>
           </div>
           <div class="panel-actions">
-            <input id="sessionSearchInput" class="search-input" type="search" placeholder="搜索网卡、源 IP、厂商、域名或时间">
+            <input id="sessionSearchInput" class="search-input" type="search" placeholder="搜索网卡、源 IP、用户、厂商、域名">
+            <label class="toggle-label"><input id="sessionHideEmpty" type="checkbox" checked> 隐藏空会话</label>
             <button id="exportSessionBtn" class="ghost action-button" type="button">导出当前筛选会话 CSV</button>
           </div>
         </div>
@@ -140,7 +141,8 @@
             <h3 id="requestPanelTitle">API 请求明细</h3>
           </div>
           <div class="panel-actions">
-            <input id="requestSearchInput" class="search-input" type="search" placeholder="搜索网卡、源 IP、厂商、域名或时间">
+            <input id="requestSearchInput" class="search-input" type="search" placeholder="搜索网卡、源 IP、用户、厂商、域名">
+            <label class="toggle-label"><input id="requestHideEmpty" type="checkbox" checked> 隐藏空会话</label>
             <button id="exportRequestBtn" class="ghost action-button" type="button">导出当前筛选明细 CSV</button>
           </div>
         </div>
