@@ -46,6 +46,7 @@ const TIME_RANGE_OPTIONS = [
   {value: 60, label: '近1小时'},
   {value: 0, label: '显示全部'},
 ];
+const TIME_RANGE_OPTIONS_NO_ALL = TIME_RANGE_OPTIONS.filter(item => item.value !== 0);
 
 function emptyPaged(pageSize) {
   return {
@@ -601,6 +602,24 @@ function renderPageAlert() {
   host.className = 'alert-banner';
 }
 
+function showToast(message, type) {
+  const existing = document.querySelector('.toast-notification');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.className = 'toast-notification toast-' + (type || 'info');
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+}
+
+function localToServerDateTime(value) {
+  if (!value) return '';
+  return value.replace('T', ' ') + ':00';
+}
+
 function renderSummary() {
   const root = document.getElementById('summarySection');
   root.classList.toggle('hidden', !(state.selectedView === 'apiSummary' || state.selectedView === 'webSummary'));
@@ -653,10 +672,11 @@ function renderPagination(hostId, payload, prefix, onChange) {
   });
 }
 
-function renderTimeRangeFilters(hostId, group) {
+function renderTimeRangeFilters(hostId, group, options) {
+  const rangeOptions = options || TIME_RANGE_OPTIONS;
   const host = document.getElementById(hostId);
   const currentValue = Number(state.timeRanges[group] || 0);
-  host.innerHTML = TIME_RANGE_OPTIONS.map(item => `
+  host.innerHTML = rangeOptions.map(item => `
     <button class="filter-chip ${currentValue === Number(item.value) ? 'active' : ''}" type="button" data-time-range="${group}:${item.value}">${item.label}</button>
   `).join('');
   Array.prototype.forEach.call(host.querySelectorAll('[data-time-range]'), node => {
@@ -664,6 +684,9 @@ function renderTimeRangeFilters(hostId, group) {
       const parts = node.getAttribute('data-time-range').split(':');
       const nextGroup = parts[0];
       const nextValue = Number(parts[1] || 0);
+      if (nextValue === 0 && !confirm('显示全部数据可能导致加载缓慢或页面卡顿，确认继续？')) {
+        return;
+      }
       state.timeRanges[nextGroup] = nextValue;
       if (nextGroup === 'sessions') {
         state.pagination.apiSessions = 1;
@@ -725,7 +748,7 @@ function renderRequestLogs() {
   root.classList.toggle('hidden', !isRequestView(state.selectedView));
   if (root.classList.contains('hidden')) return;
   document.getElementById('requestPanelTitle').textContent = detailTitle(state.selectedView);
-  renderTimeRangeFilters('requestTimeFilters', 'requests');
+  renderTimeRangeFilters('requestTimeFilters', 'requests', TIME_RANGE_OPTIONS_NO_ALL);
   const payload = state.requestLogsPage;
   const rows = requestRows();
   const body = document.getElementById('requestLogBody');
@@ -882,8 +905,28 @@ function downloadCsv(filename, headers, rows) {
   URL.revokeObjectURL(url);
 }
 
-function exportSummaryCsv() {
-  const rows = summaryRows().map(row => [
+function getExportDateRange() {
+  const startEl = document.getElementById('exportStartDate');
+  const endEl = document.getElementById('exportEndDate');
+  const startDate = startEl && startEl.value ? localToServerDateTime(startEl.value) : '';
+  const endDate = endEl && endEl.value ? localToServerDateTime(endEl.value) : '';
+  return {startDate, endDate};
+}
+
+async function exportSummaryCsv() {
+  const {startDate, endDate} = getExportDateRange();
+  let exportRows;
+  if (startDate || endDate) {
+    const result = await request(`/api/summary${buildQuery({start_date: startDate, end_date: endDate})}`);
+    const allRows = result.data || [];
+    const vendorFiltered = filteredRows(allRows);
+    exportRows = state.selectedView === 'webSummary'
+      ? vendorFiltered.filter(row => row.channel_type !== 'api' && row.channel_type !== 'api_quic')
+      : vendorFiltered.filter(row => row.channel_type === 'api' || row.channel_type === 'api_quic');
+  } else {
+    exportRows = summaryRows();
+  }
+  const rows = exportRows.map(row => [
     row.vendor,
     row.domain,
     channelLabel(row.channel_type),
@@ -900,14 +943,15 @@ function exportSummaryCsv() {
   ]);
   const kind = state.selectedView === 'webSummary' ? 'web_summary' : 'api_summary';
   downloadCsv(csvFilename(kind), ['模型厂商', '访问域名', '调用类型', '会话数', '请求次数', '上行流量', '下行流量', '总流量', '输入Token', '输出Token', '总Token', '预估金额USD', '最近访问时间'], rows);
+  showToast(`已导出 ${rows.length} 条汇总记录`, 'success');
 }
 
-async function fetchAllPagedRows(view, pageSize) {
+async function fetchAllPagedRows(view, pageSize, startDate, endDate) {
   let page = 1;
   let totalPages = 1;
   const items = [];
   while (page <= totalPages) {
-    const config = buildViewRequest(view, {page, pageSize});
+    const config = buildViewRequest(view, {page, pageSize, startDate, endDate});
     const result = await request(config.url);
     const payload = normalizePagedPayload(result.data, page, pageSize);
     items.push.apply(items, payload.items || []);
@@ -918,7 +962,8 @@ async function fetchAllPagedRows(view, pageSize) {
 }
 
 async function exportSessionCsv() {
-  const items = await fetchAllPagedRows(state.selectedView, EXPORT_PAGE_SIZE);
+  const {startDate, endDate} = getExportDateRange();
+  const items = await fetchAllPagedRows(state.selectedView, EXPORT_PAGE_SIZE, startDate, endDate);
   const rows = items.map(row => [
     row.iface,
     row.src_ip,
@@ -938,10 +983,12 @@ async function exportSessionCsv() {
   ]);
   const kind = state.selectedView === 'webSessions' ? 'web_session_log_all' : 'api_session_log_all';
   downloadCsv(csvFilename(kind), ['抓包网卡', '源IP', '首次时间', '最近时间', '调用类型', '模型厂商', '访问域名', '上行流量', '下行流量', '总流量', '输入Token', '输出Token', '总Token', '预估金额USD', '请求次数'], rows);
+  showToast(`已导出 ${rows.length} 条会话记录`, 'success');
 }
 
 async function exportRequestCsv() {
-  const items = await fetchAllPagedRows(state.selectedView, EXPORT_PAGE_SIZE);
+  const {startDate, endDate} = getExportDateRange();
+  const items = await fetchAllPagedRows(state.selectedView, EXPORT_PAGE_SIZE, startDate, endDate);
   const rows = items.map(row => [
     row.iface,
     row.src_ip,
@@ -960,6 +1007,7 @@ async function exportRequestCsv() {
   ]);
   const kind = state.selectedView === 'webRequests' ? 'web_request_detail_all' : 'api_request_detail_all';
   downloadCsv(csvFilename(kind), ['抓包网卡', '源IP', '访问时间', '调用类型', '模型厂商', '访问域名', '上行流量', '下行流量', '总流量', '输入Token', '输出Token', '总Token', '预估金额USD', '请求次数'], rows);
+  showToast(`已导出 ${rows.length} 条请求明细`, 'success');
 }
 
 function renderAll() {
@@ -1021,6 +1069,9 @@ async function refreshCommonData() {
 
 function buildViewRequest(view, overrides) {
   const opts = overrides || {};
+  const useStartDate = opts.startDate || '';
+  const useEndDate = opts.endDate || '';
+  const useDateRange = !!(useStartDate || useEndDate);
   if (isSessionView(view)) {
     const group = viewGroup(view);
     const channelClass = viewChannelClass(view);
@@ -1033,9 +1084,11 @@ function buildViewRequest(view, overrides) {
         page_size: pageSize,
         vendor: state.selectedVendor === '全部' ? '' : state.selectedVendor,
         channel_class: channelClass,
-        time_window_minutes: state.timeRanges[group],
+        time_window_minutes: useDateRange ? 0 : state.timeRanges[group],
         search: state.search.sessions,
         min_bytes: state.hideEmpty.sessions ? 1 : 0,
+        start_date: useStartDate,
+        end_date: useEndDate,
       })}`,
       page,
       pageSize,
@@ -1058,9 +1111,11 @@ function buildViewRequest(view, overrides) {
         page_size: pageSize,
         vendor: state.selectedVendor === '全部' ? '' : state.selectedVendor,
         channel_class: channelClass,
-        time_window_minutes: state.timeRanges[group],
+        time_window_minutes: useDateRange ? 0 : state.timeRanges[group],
         search: state.search.requests,
         min_bytes: state.hideEmpty.requests ? 1 : 0,
+        start_date: useStartDate,
+        end_date: useEndDate,
       })}`,
       page,
       pageSize,
@@ -1079,8 +1134,10 @@ function buildViewRequest(view, overrides) {
       url: `/api/transport-events${buildQuery({
         page,
         page_size: pageSize,
-        time_window_minutes: state.timeRanges.quic,
+        time_window_minutes: useDateRange ? 0 : state.timeRanges.quic,
         search: state.search.quic,
+        start_date: useStartDate,
+        end_date: useEndDate,
       })}`,
       page,
       pageSize,
@@ -1157,22 +1214,30 @@ async function addTargetRule(event) {
   const vendor = document.getElementById('vendorInput').value.trim();
   const domain = document.getElementById('domainInput').value.trim();
   const matchType = document.getElementById('matchTypeInput').value;
-  if (!vendor || !domain) return;
+  if (!vendor || !domain) {
+    showToast('请填写厂商名称和域名规则', 'warning');
+    return;
+  }
   const domains = domain.split(/[\n,]+/).map(item => item.trim()).filter(Boolean);
-  await request('/api/targets', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      vendor,
-      domains,
-      match_type: matchType,
-    }),
-  });
-  document.getElementById('vendorInput').value = vendor;
-  document.getElementById('domainInput').value = '';
-  state.selectedView = 'targets';
-  state.loadedViews.targets = false;
-  await refreshAll(true);
+  try {
+    await request('/api/targets', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        vendor,
+        domains,
+        match_type: matchType,
+      }),
+    });
+    document.getElementById('vendorInput').value = vendor;
+    document.getElementById('domainInput').value = '';
+    showToast(`已成功为 ${vendor} 添加 ${domains.length} 条域名规则`, 'success');
+    state.selectedView = 'targets';
+    state.loadedViews.targets = false;
+    await refreshAll(true);
+  } catch (err) {
+    showToast('保存规则失败: ' + (err.message || '未知错误'), 'error');
+  }
 }
 
 function changePage(view, page) {
@@ -1208,7 +1273,17 @@ function bindSearchInput(elementId, key) {
 }
 
 document.getElementById('targetForm').addEventListener('submit', addTargetRule);
-document.getElementById('exportSummaryBtn').addEventListener('click', exportSummaryCsv);
+document.getElementById('exportSummaryBtn').addEventListener('click', () => {
+  exportSummaryCsv()
+    .then(() => {
+      setLoadError('汇总导出', false);
+      renderAll();
+    })
+    .catch(() => {
+      setLoadError('汇总导出', true);
+      renderAll();
+    });
+});
 document.getElementById('exportSessionBtn').addEventListener('click', () => {
   exportSessionCsv()
     .then(() => {
@@ -1248,6 +1323,13 @@ function bindHideEmpty(checkboxId, group) {
 }
 bindHideEmpty('sessionHideEmpty', 'sessions');
 bindHideEmpty('requestHideEmpty', 'requests');
+
+// Export date range clear
+document.getElementById('clearDateRange').addEventListener('click', () => {
+  document.getElementById('exportStartDate').value = '';
+  document.getElementById('exportEndDate').value = '';
+  showToast('已清除自定义导出时间范围', 'info');
+});
 
 renderAll();
 refreshAll().catch(() => renderAll());

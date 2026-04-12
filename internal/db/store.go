@@ -496,8 +496,8 @@ func (s *Store) LoadOpenSessions() ([]*model.Session, error) {
 }
 
 // QueryLogs queries api_logs with filtering and pagination.
-func (s *Store) QueryLogs(vendor, search, channelClass string, timeWindowMinutes, page, pageSize, minBytes int) (*model.PagedResult, error) {
-	where, args := buildLogFilters(vendor, search, channelClass, timeWindowMinutes)
+func (s *Store) QueryLogs(vendor, search, channelClass string, timeWindowMinutes, page, pageSize, minBytes int, startDate, endDate string) (*model.PagedResult, error) {
+	where, args := buildLogFilters(vendor, search, channelClass, timeWindowMinutes, startDate, endDate)
 	if minBytes > 0 {
 		if where == "" {
 			where = " WHERE downlink_bytes >= ?"
@@ -558,7 +558,16 @@ func (s *Store) QueryLogs(vendor, search, channelClass string, timeWindowMinutes
 }
 
 // QuerySummary returns vendor+domain level aggregation (matches Python version).
-func (s *Store) QuerySummary() ([]map[string]interface{}, error) {
+func (s *Store) QuerySummary(startDate, endDate string) ([]map[string]interface{}, error) {
+	where := ""
+	var whereArgs []interface{}
+	if startDate != "" || endDate != "" {
+		var clauses []string
+		applyDateRange(&clauses, &whereArgs, "COALESCE(last_seen, first_seen)", startDate, endDate)
+		if len(clauses) > 0 {
+			where = " WHERE " + strings.Join(clauses, " AND ")
+		}
+	}
 	rows, err := s.DB.Query(`SELECT
 		vendor, domain,
 		COUNT(*) AS session_count,
@@ -567,8 +576,8 @@ func (s *Store) QuerySummary() ([]map[string]interface{}, error) {
 		COALESCE(SUM(total_bytes), 0) AS total_bytes,
 		COALESCE(SUM(request_count), 0) AS request_count,
 		MAX(COALESCE(last_seen, first_seen)) AS latest_seen
-		FROM api_logs
-		GROUP BY vendor, domain`)
+		FROM api_logs`+where+`
+		GROUP BY vendor, domain`, whereArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -618,8 +627,8 @@ func (s *Store) QuerySummary() ([]map[string]interface{}, error) {
 }
 
 // QueryRequestLogs queries request_logs with filtering and pagination.
-func (s *Store) QueryRequestLogs(vendor, search, channelClass string, timeWindowMinutes, page, pageSize, minBytes int) (*model.PagedResult, error) {
-	where, args := buildRequestLogFilters(vendor, search, channelClass, timeWindowMinutes)
+func (s *Store) QueryRequestLogs(vendor, search, channelClass string, timeWindowMinutes, page, pageSize, minBytes int, startDate, endDate string) (*model.PagedResult, error) {
+	where, args := buildRequestLogFilters(vendor, search, channelClass, timeWindowMinutes, startDate, endDate)
 	if minBytes > 0 {
 		if where == "" {
 			where = " WHERE downlink_bytes >= ?"
@@ -678,8 +687,8 @@ func (s *Store) QueryRequestLogs(vendor, search, channelClass string, timeWindow
 }
 
 // QueryTransportEvents queries transport_events with pagination.
-func (s *Store) QueryTransportEvents(srcIP, protocol, search string, timeWindowMinutes, page, pageSize int) (*model.PagedResult, error) {
-	where, args := buildTransportFilters(srcIP, protocol, search, timeWindowMinutes)
+func (s *Store) QueryTransportEvents(srcIP, protocol, search string, timeWindowMinutes, page, pageSize int, startDate, endDate string) (*model.PagedResult, error) {
+	where, args := buildTransportFilters(srcIP, protocol, search, timeWindowMinutes, startDate, endDate)
 
 	var total int
 	if err := s.DB.QueryRow("SELECT COUNT(*) FROM transport_events"+where, args...).Scan(&total); err != nil {
@@ -841,7 +850,7 @@ var WebMixedDomains = []string{
 }
 
 // helper: build WHERE clause for api_logs
-func buildLogFilters(vendor, search, channelClass string, timeWindowMinutes int) (string, []interface{}) {
+func buildLogFilters(vendor, search, channelClass string, timeWindowMinutes int, startDate, endDate string) (string, []interface{}) {
 	var clauses []string
 	var args []interface{}
 
@@ -855,7 +864,11 @@ func buildLogFilters(vendor, search, channelClass string, timeWindowMinutes int)
 		args = append(args, s, s, s, s, s, s, s, s)
 	}
 	applyChannelClass(&clauses, &args, "domain", channelClass)
-	applyTimeWindow(&clauses, &args, "capture_job_id", timeWindowMinutes)
+	if startDate != "" || endDate != "" {
+		applyDateRange(&clauses, &args, "COALESCE(last_seen, first_seen)", startDate, endDate)
+	} else {
+		applyTimeWindow(&clauses, &args, "capture_job_id", timeWindowMinutes)
+	}
 
 	if len(clauses) == 0 {
 		return "", nil
@@ -863,7 +876,7 @@ func buildLogFilters(vendor, search, channelClass string, timeWindowMinutes int)
 	return " WHERE " + strings.Join(clauses, " AND "), args
 }
 
-func buildRequestLogFilters(vendor, search, channelClass string, timeWindowMinutes int) (string, []interface{}) {
+func buildRequestLogFilters(vendor, search, channelClass string, timeWindowMinutes int, startDate, endDate string) (string, []interface{}) {
 	var clauses []string
 	var args []interface{}
 
@@ -877,7 +890,11 @@ func buildRequestLogFilters(vendor, search, channelClass string, timeWindowMinut
 		args = append(args, s, s, s, s, s, s, s)
 	}
 	applyChannelClass(&clauses, &args, "domain", channelClass)
-	applyTimeWindow(&clauses, &args, "capture_job_id", timeWindowMinutes)
+	if startDate != "" || endDate != "" {
+		applyDateRange(&clauses, &args, "seen_at", startDate, endDate)
+	} else {
+		applyTimeWindow(&clauses, &args, "capture_job_id", timeWindowMinutes)
+	}
 
 	if len(clauses) == 0 {
 		return "", nil
@@ -885,7 +902,7 @@ func buildRequestLogFilters(vendor, search, channelClass string, timeWindowMinut
 	return " WHERE " + strings.Join(clauses, " AND "), args
 }
 
-func buildTransportFilters(srcIP, protocol, search string, timeWindowMinutes int) (string, []interface{}) {
+func buildTransportFilters(srcIP, protocol, search string, timeWindowMinutes int, startDate, endDate string) (string, []interface{}) {
 	var clauses []string
 	var args []interface{}
 
@@ -902,7 +919,11 @@ func buildTransportFilters(srcIP, protocol, search string, timeWindowMinutes int
 		s := "%" + search + "%"
 		args = append(args, s, s, s)
 	}
-	applyTimeWindow(&clauses, &args, "capture_job_id", timeWindowMinutes)
+	if startDate != "" || endDate != "" {
+		applyDateRange(&clauses, &args, "last_seen", startDate, endDate)
+	} else {
+		applyTimeWindow(&clauses, &args, "capture_job_id", timeWindowMinutes)
+	}
 
 	if len(clauses) == 0 {
 		return "", nil
@@ -950,6 +971,18 @@ func applyTimeWindow(clauses *[]string, args *[]interface{}, jobColumnName strin
 	cutoff := time.Now().UTC().Add(8 * time.Hour).Add(-time.Duration(timeWindowMinutes) * time.Minute).Format("2006-01-02 15:04:05")
 	*clauses = append(*clauses, fmt.Sprintf("%s IN (SELECT id FROM capture_jobs WHERE status = ? AND analysis_finished_at >= ?)", jobColumnName))
 	*args = append(*args, "parsed", cutoff)
+}
+
+// applyDateRange adds start_date / end_date filters on a timestamp column.
+func applyDateRange(clauses *[]string, args *[]interface{}, timeColumn, startDate, endDate string) {
+	if startDate != "" {
+		*clauses = append(*clauses, fmt.Sprintf("%s >= ?", timeColumn))
+		*args = append(*args, startDate)
+	}
+	if endDate != "" {
+		*clauses = append(*clauses, fmt.Sprintf("%s <= ?", timeColumn))
+		*args = append(*args, endDate)
+	}
 }
 
 func sessionToMap(s *model.Session) map[string]interface{} {

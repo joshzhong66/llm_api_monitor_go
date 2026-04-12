@@ -26,6 +26,8 @@ type Server struct {
 	mux     *http.ServeMux
 }
 
+const maxPageSize = 10000
+
 // NewServer creates a new API server.
 func NewServer(cfg *config.Config, store *db.Store, engine *parser.Engine) *Server {
 	// IP-user map file: look in scripts/ directory relative to working dir
@@ -124,13 +126,18 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	page := queryInt(q, "page", 1)
 	pageSize := queryInt(q, "page_size", queryInt(q, "limit", 50))
+	if pageSize > maxPageSize {
+		pageSize = maxPageSize
+	}
 	vendor := q.Get("vendor")
 	search := q.Get("search")
 	channelClass := q.Get("channel_class")
 	timeWindow := queryInt(q, "time_window_minutes", 0)
 	minBytes := queryInt(q, "min_bytes", 0)
+	startDate := q.Get("start_date")
+	endDate := q.Get("end_date")
 
-	result, err := s.store.QueryLogs(vendor, search, channelClass, timeWindow, page, pageSize, minBytes)
+	result, err := s.store.QueryLogs(vendor, search, channelClass, timeWindow, page, pageSize, minBytes, startDate, endDate)
 	if err != nil {
 		log.Printf("[api] query logs error: %v", err)
 		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()}, 500)
@@ -153,7 +160,10 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	data, err := s.store.QuerySummary()
+	q := r.URL.Query()
+	startDate := q.Get("start_date")
+	endDate := q.Get("end_date")
+	data, err := s.store.QuerySummary(startDate, endDate)
 	if err != nil {
 		log.Printf("[api] query summary error: %v", err)
 		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()}, 500)
@@ -176,13 +186,18 @@ func (s *Server) handleRequestLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	page := queryInt(q, "page", 1)
 	pageSize := queryInt(q, "page_size", queryInt(q, "limit", 50))
+	if pageSize > maxPageSize {
+		pageSize = maxPageSize
+	}
 	vendor := q.Get("vendor")
 	search := q.Get("search")
 	channelClass := q.Get("channel_class")
 	timeWindow := queryInt(q, "time_window_minutes", 0)
 	minBytes := queryInt(q, "min_bytes", 0)
+	startDate := q.Get("start_date")
+	endDate := q.Get("end_date")
 
-	result, err := s.store.QueryRequestLogs(vendor, search, channelClass, timeWindow, page, pageSize, minBytes)
+	result, err := s.store.QueryRequestLogs(vendor, search, channelClass, timeWindow, page, pageSize, minBytes, startDate, endDate)
 	if err != nil {
 		log.Printf("[api] query request logs error: %v", err)
 		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()}, 500)
@@ -207,12 +222,17 @@ func (s *Server) handleTransportEvents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	page := queryInt(q, "page", 1)
 	pageSize := queryInt(q, "page_size", queryInt(q, "limit", 50))
+	if pageSize > maxPageSize {
+		pageSize = maxPageSize
+	}
 	srcIP := q.Get("src_ip")
 	protocol := q.Get("protocol")
 	search := q.Get("search")
 	timeWindow := queryInt(q, "time_window_minutes", 0)
+	startDate := q.Get("start_date")
+	endDate := q.Get("end_date")
 
-	result, err := s.store.QueryTransportEvents(srcIP, protocol, search, timeWindow, page, pageSize)
+	result, err := s.store.QueryTransportEvents(srcIP, protocol, search, timeWindow, page, pageSize, startDate, endDate)
 	if err != nil {
 		log.Printf("[api] query transport events error: %v", err)
 		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()}, 500)

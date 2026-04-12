@@ -58,6 +58,21 @@
         </div>
         <div id="pipelineHint" class="panel-note"></div>
       </section>
+      <section class="toolbar panel export-date-section">
+        <div class="toolbar-main">
+          <div>
+            <p class="toolbar-label">自定义导出时间范围</p>
+            <div class="date-range-row">
+              <label class="date-label"><span>开始</span><input id="exportStartDate" type="datetime-local" class="date-input"></label>
+              <label class="date-label"><span>结束</span><input id="exportEndDate" type="datetime-local" class="date-input"></label>
+              <button id="clearDateRange" class="ghost action-button" type="button">清除</button>
+            </div>
+          </div>
+          <div>
+            <p class="toolbar-label date-hint-text">设置后，导出 CSV 将使用此时间范围。留空则使用当前时间窗口。</p>
+          </div>
+        </div>
+      </section>
       <section id="summarySection" class="panel">
         <div class="panel-head">
           <div>

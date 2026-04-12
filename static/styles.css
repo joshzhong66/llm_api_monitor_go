@@ -614,3 +614,63 @@ tbody tr:hover {
   margin: 0;
   cursor: pointer;
 }
+
+/* Toast notifications */
+.toast-notification {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  padding: 12px 20px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  z-index: 9999;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.18);
+  transition: opacity 0.3s ease;
+  max-width: 420px;
+}
+.toast-success { background: linear-gradient(135deg, #1c8a4c, #28a85e); }
+.toast-error { background: linear-gradient(135deg, #c62828, #e53935); }
+.toast-warning { background: linear-gradient(135deg, #be7a18, #e6950f); }
+.toast-info { background: linear-gradient(135deg, var(--accent), #157fbe); }
+
+/* Export date range section */
+.export-date-section {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+.date-range-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.date-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.date-input {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--panel);
+  color: var(--text);
+  min-width: 200px;
+}
+.date-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.date-hint-text {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
