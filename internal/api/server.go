@@ -56,6 +56,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/targets", s.handleTargets)
 	s.mux.HandleFunc("/api/jobs", s.handleJobs)
 	s.mux.HandleFunc("/api/pipeline", s.handlePipeline)
+	s.mux.HandleFunc("/api/quic-observations", s.handleQUICObservations)
 	s.mux.HandleFunc("/api/interface-traffic", s.handleInterfaceTraffic)
 
 	// Static files
@@ -312,6 +313,16 @@ func (s *Server) handleInterfaceTraffic(w http.ResponseWriter, r *http.Request) 
 		"flows": []interface{}{},
 		"iface": s.cfg.Iface,
 	}}, 200)
+}
+
+func (s *Server) handleQUICObservations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	limit := queryInt(r.URL.Query(), "limit", 50)
+	data := s.engine.RecentQUICObservations(limit)
+	s.jsonResponse(w, map[string]interface{}{"ok": true, "data": data}, 200)
 }
 
 func (s *Server) jsonResponse(w http.ResponseWriter, payload interface{}, status int) {

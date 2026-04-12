@@ -2,89 +2,154 @@
 # 解析管道进度查询脚本
 # 用法: bash scripts/pipeline_status.sh
 
-MYSQL_CMD="docker exec llm-monitor-mysql mysql -uroot -p123456 llm_api_monitor -e"
+MYSQL_DOCKER=(docker exec llm-monitor-mysql mysql -uroot -p123456 llm_api_monitor)
 SPOOL_DIR="/data/llm_api_monitor_runtime/data/spool/results"
 
-echo "=========================================="
-echo "  LLM API Monitor 解析管道进度"
-echo "  $(date '+%Y-%m-%d %H:%M:%S')"
-echo "=========================================="
+q() {
+    "${MYSQL_DOCKER[@]}" -N -e "$1" 2>/dev/null
+}
 
-echo ""
-echo "--- 1. 实时延迟 ---"
-LATEST=$(docker exec llm-monitor-mysql mysql -uroot -p123456 llm_api_monitor -N -e "SELECT MAX(last_seen) FROM api_logs;" 2>/dev/null)
-NOW=$(date '+%Y-%m-%d %H:%M:%S')
-echo "  DB 最新数据:  $LATEST"
-echo "  当前时间:     $NOW"
-if [ -n "$LATEST" ]; then
-    LAG=$(( $(date -d "$NOW" +%s 2>/dev/null || echo 0) - $(date -d "$LATEST" +%s 2>/dev/null || echo 0) ))
-    if [ "$LAG" -gt 0 ] 2>/dev/null; then
-        if [ "$LAG" -lt 60 ]; then
-            echo "  延迟:         ${LAG}s (正常)"
-        elif [ "$LAG" -lt 300 ]; then
-            echo "  延迟:         $((LAG/60))m$((LAG%60))s (轻微)"
-        else
-            echo "  延迟:         $((LAG/3600))h$((LAG%3600/60))m (异常!)"
-        fi
-    fi
-fi
+HEADER_TOP='┌──────────────────────────────────────────────────────────────────────────┐'
+HEADER_BOTTOM='└──────────────────────────────────────────────────────────────────────────┘'
 
-echo ""
-echo "--- 2. Go 解析管道 ---"
-docker exec llm-monitor-mysql mysql -uroot -p123456 llm_api_monitor -e "
-SELECT
-  analysis_status AS status,
-  COUNT(*) AS jobs,
-  MIN(started_at) AS earliest,
-  MAX(started_at) AS latest
-FROM capture_jobs
-GROUP BY analysis_status
-ORDER BY FIELD(analysis_status,'queued','parsing','parsed_ready','merging','merged','failed');" 2>/dev/null
+box_line() {
+    local text="$1"
+    local width="${2:-72}"
+    printf '│ %-*s │\n' "$width" "$text"
+}
 
-TOTAL=$(docker exec llm-monitor-mysql mysql -uroot -p123456 llm_api_monitor -N -e "SELECT COUNT(*) FROM capture_jobs;" 2>/dev/null)
-MERGED=$(docker exec llm-monitor-mysql mysql -uroot -p123456 llm_api_monitor -N -e "SELECT COUNT(*) FROM capture_jobs WHERE analysis_status='merged';" 2>/dev/null)
-QUEUED=$(docker exec llm-monitor-mysql mysql -uroot -p123456 llm_api_monitor -N -e "SELECT COUNT(*) FROM capture_jobs WHERE analysis_status='queued';" 2>/dev/null)
-FAILED=$(docker exec llm-monitor-mysql mysql -uroot -p123456 llm_api_monitor -N -e "SELECT COUNT(*) FROM capture_jobs WHERE analysis_status='failed';" 2>/dev/null)
-PENDING=$((TOTAL - MERGED - FAILED))
-if [ "$TOTAL" -gt 0 ] 2>/dev/null; then
-    PCT=$((MERGED * 100 / TOTAL))
-    echo "  总进度: $MERGED/$TOTAL ($PCT%)  待处理: $PENDING  失败: $FAILED"
-fi
-
-echo ""
-echo "--- 3. Python Spool 消化 ---"
-SPOOL_COUNT=$(ls "$SPOOL_DIR"/*.result.json.gz 2>/dev/null | wc -l)
-DRAIN_PID=$(pgrep -f drain_spool_worker.py 2>/dev/null | head -1)
-echo "  待消化文件:  $SPOOL_COUNT"
-if [ -n "$DRAIN_PID" ]; then
-    ELAPSED=$(ps -p "$DRAIN_PID" -o etime= 2>/dev/null | tr -d ' ')
-    CPU=$(ps -p "$DRAIN_PID" -o %cpu= 2>/dev/null | tr -d ' ')
-    echo "  进程状态:    运行中 (PID $DRAIN_PID, ${ELAPSED}, CPU ${CPU}%)"
-else
-    if [ "$SPOOL_COUNT" -eq 0 ]; then
-        echo "  进程状态:    已完成"
+fmt_lag() {
+    local lag="$1"
+    if [ "$lag" -lt 60 ]; then
+        printf '%ss (正常)' "$lag"
+    elif [ "$lag" -lt 300 ]; then
+        printf '%sm%ss (轻微)' $((lag/60)) $((lag%60))
     else
-        echo "  进程状态:    未运行 (用 bash scripts/spool_drain.sh start 启动)"
+        printf '%sh%sm (异常!)' $((lag/3600)) $((lag%3600/60))
+    fi
+}
+
+table_top() { echo "┌────────────────┬────────┬─────────────────────┬─────────────────────┐"; }
+table_mid() { echo "├────────────────┼────────┼─────────────────────┼─────────────────────┤"; }
+table_bottom() { echo "└────────────────┴────────┴─────────────────────┴─────────────────────┘"; }
+
+stat_row() {
+    printf "│ %-14s │ %6s │ %-19s │ %-19s │\n" "$1" "$2" "$3" "$4"
+}
+
+mini_top() { echo "┌──────────────────────────┬──────────────────────────────────────────────┐"; }
+mini_bottom() { echo "└──────────────────────────┴──────────────────────────────────────────────┘"; }
+mini_row() {
+    printf "│ %-24s │ %-44s │\n" "$1" "$2"
+}
+
+NOW="$(date '+%Y-%m-%d %H:%M:%S')"
+LATEST="$(q "SELECT MAX(last_seen) FROM api_logs;")"
+
+TOTAL="$(q "SELECT COUNT(*) FROM capture_jobs;")"
+MERGED="$(q "SELECT COUNT(*) FROM capture_jobs WHERE analysis_status='merged';")"
+QUEUED="$(q "SELECT COUNT(*) FROM capture_jobs WHERE analysis_status='queued';")"
+PARSING="$(q "SELECT COUNT(*) FROM capture_jobs WHERE analysis_status='parsing';")"
+READY="$(q "SELECT COUNT(*) FROM capture_jobs WHERE analysis_status='parsed_ready';")"
+MERGING="$(q "SELECT COUNT(*) FROM capture_jobs WHERE analysis_status='merging';")"
+FAILED="$(q "SELECT COUNT(*) FROM capture_jobs WHERE analysis_status='failed';")"
+PENDING=$((TOTAL - MERGED - FAILED))
+
+RT_QUEUED="$(q "SELECT COUNT(*) FROM capture_jobs WHERE queue_name='realtime' AND analysis_status='queued';")"
+RT_READY="$(q "SELECT COUNT(*) FROM capture_jobs WHERE queue_name='realtime' AND analysis_status='parsed_ready';")"
+RT_MERGING="$(q "SELECT COUNT(*) FROM capture_jobs WHERE queue_name='realtime' AND analysis_status='merging';")"
+BACKFILL_READY="$(q "SELECT COUNT(*) FROM capture_jobs WHERE queue_name='backfill' AND analysis_status='parsed_ready';")"
+
+GO_PID="$(pgrep -f 'llm-api-monitor$' 2>/dev/null | head -1)"
+if [ -n "$GO_PID" ]; then
+    GO_CPU="$(ps -p "$GO_PID" -o %cpu= 2>/dev/null | tr -d ' ')"
+    GO_MEM="$(ps -p "$GO_PID" -o rss= 2>/dev/null | awk '{printf "%.0fMB", $1/1024}')"
+else
+    GO_CPU="-"
+    GO_MEM="-"
+fi
+
+DRAIN_PID="$(pgrep -f drain_spool_worker.py 2>/dev/null | head -1)"
+SPOOL_COUNT=$(ls "$SPOOL_DIR"/*.result.json.gz 2>/dev/null | wc -l)
+if [ -n "$DRAIN_PID" ]; then
+    DRAIN_ELAPSED="$(ps -p "$DRAIN_PID" -o etime= 2>/dev/null | tr -d ' ')"
+    DRAIN_CPU="$(ps -p "$DRAIN_PID" -o %cpu= 2>/dev/null | tr -d ' ')"
+    DRAIN_STATUS="运行中 (PID $DRAIN_PID, ${DRAIN_ELAPSED}, CPU ${DRAIN_CPU}%)"
+else
+    if [ "$SPOOL_COUNT" -eq 0 ] 2>/dev/null; then
+        DRAIN_STATUS="已完成"
+    else
+        DRAIN_STATUS="未运行"
     fi
 fi
 
-echo ""
-echo "--- 4. Go 服务 ---"
-GO_PID=$(pgrep -f 'llm-api-monitor$' 2>/dev/null | head -1)
-if [ -n "$GO_PID" ]; then
-    CPU=$(ps -p "$GO_PID" -o %cpu= 2>/dev/null | tr -d ' ')
-    MEM=$(ps -p "$GO_PID" -o rss= 2>/dev/null | awk '{printf "%.0fMB", $1/1024}')
-    echo "  状态: 运行中 (PID $GO_PID, CPU ${CPU}%, MEM $MEM)"
+if [ -n "$LATEST" ]; then
+    NOW_EPOCH=$(date -d "$NOW" +%s 2>/dev/null || echo 0)
+    LATEST_EPOCH=$(date -d "$LATEST" +%s 2>/dev/null || echo 0)
+    LAG=$((NOW_EPOCH - LATEST_EPOCH))
+    LAG_TEXT="$(fmt_lag "$LAG")"
 else
-    echo "  状态: 未运行"
+    LAG_TEXT="无数据"
 fi
 
-echo ""
-echo "--- 5. 数据库表行数 ---"
-docker exec llm-monitor-mysql mysql -uroot -p123456 llm_api_monitor -e "
-SELECT TABLE_NAME, TABLE_ROWS, ROUND(DATA_LENGTH/1024/1024) AS data_mb
-FROM information_schema.TABLES
-WHERE TABLE_SCHEMA='llm_api_monitor'
-ORDER BY TABLE_ROWS DESC;" 2>/dev/null
+if [ "${READY:-0}" -gt "${PARSING:-0}" ] && [ "${MERGING:-0}" -gt 0 ]; then
+    BOTTLENECK="写库/合并偏慢，parser 产出快于 writer 落库"
+elif [ "${QUEUED:-0}" -gt "${READY:-0}" ]; then
+    BOTTLENECK="解析偏慢，queued 高于 parsed_ready"
+else
+    BOTTLENECK="整体流动中，需继续观察近 5-10 分钟斜率"
+fi
 
-echo "=========================================="
+if [ "${RT_READY:-0}" -gt 800 ]; then
+    BOTTLENECK="$BOTTLENECK；实时队列 parsed_ready 积压明显"
+fi
+
+echo "$HEADER_TOP"
+box_line "LLM API Monitor Pipeline Status" 72
+box_line "$NOW" 72
+echo "$HEADER_BOTTOM"
+echo
+
+mini_top
+mini_row "DB latest" "${LATEST:-NULL}"
+mini_row "Now" "$NOW"
+mini_row "Lag" "$LAG_TEXT"
+mini_row "Progress" "${MERGED}/${TOTAL} ($((MERGED * 100 / TOTAL))%)"
+mini_row "Pending" "$PENDING"
+mini_row "Failed" "$FAILED"
+mini_row "Go service" "$( [ -n "$GO_PID" ] && echo "running PID ${GO_PID}, CPU ${GO_CPU}%, MEM ${GO_MEM}" || echo "stopped" )"
+mini_row "Python spool" "pending ${SPOOL_COUNT}, ${DRAIN_STATUS}"
+mini_bottom
+echo
+
+table_top
+stat_row "status" "jobs" "earliest" "latest"
+table_mid
+while IFS=$'\t' read -r status jobs earliest latest; do
+    [ -z "$status" ] && continue
+    stat_row "$status" "$jobs" "${earliest:-NULL}" "${latest:-NULL}"
+done < <(q "SELECT analysis_status, COUNT(*), COALESCE(MIN(started_at),''), COALESCE(MAX(started_at),'') FROM capture_jobs GROUP BY analysis_status ORDER BY FIELD(analysis_status,'queued','parsing','parsed_ready','merging','merged','failed');")
+table_bottom
+echo
+
+mini_top
+mini_row "realtime queued" "${RT_QUEUED}"
+mini_row "realtime ready" "${RT_READY}"
+mini_row "realtime merging" "${RT_MERGING}"
+mini_row "backfill ready" "${BACKFILL_READY}"
+mini_bottom
+echo
+
+echo "Diagnosis:"
+echo "  - ${BOTTLENECK}"
+echo "  - key counts: ready=${READY}, merging=${MERGING}, queued=${QUEUED}, failed=${FAILED}"
+echo
+
+echo "┌────────────────┬────────────┬─────────┐"
+echo "│ table          │ rows       │ data_mb │"
+echo "├────────────────┼────────────┼─────────┤"
+while IFS=$'\t' read -r table_name table_rows data_mb; do
+    [ -z "$table_name" ] && continue
+    printf "│ %-14s │ %10s │ %7s │\n" "$table_name" "$table_rows" "$data_mb"
+done < <(q "SELECT TABLE_NAME, TABLE_ROWS, ROUND(DATA_LENGTH/1024/1024) FROM information_schema.TABLES WHERE TABLE_SCHEMA='llm_api_monitor' ORDER BY TABLE_ROWS DESC;")
+echo "└────────────────┴────────────┴─────────┘"

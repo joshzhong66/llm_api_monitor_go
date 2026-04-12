@@ -97,11 +97,12 @@ func (d *Daemon) processResult(wr *WorkerResult) error {
 	}
 
 	if err := d.store.UpsertSessions(jobID, allRows); err != nil {
-		log.Printf("[writer] upsert sessions error: %v", err)
+		log.Printf("[writer] upsert sessions error (will retry): %v", err)
+		// Reset to queued so backfill can retry, don't mark as failed
 		_ = d.store.UpdateJobStatus(jobID, map[string]interface{}{
-			"status":          "failed",
-			"analysis_status": "failed",
-			"message":         err.Error(),
+			"status":          "queued",
+			"analysis_status": "queued",
+			"worker_name":     nil,
 		})
 		return err
 	}

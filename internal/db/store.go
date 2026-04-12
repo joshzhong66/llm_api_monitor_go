@@ -315,127 +315,137 @@ func (s *Store) UpdateJob(jobID int64, finishedAt string, packetCount int, statu
 	return err
 }
 
-// UpsertSessions upserts session rows into api_logs (batch).
+// UpsertSessions upserts session rows into api_logs using multi-row INSERT.
 func (s *Store) UpsertSessions(jobID int64, rows []*model.Session) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	stmt, err := tx.Prepare(`INSERT INTO api_logs
-		(capture_job_id, iface, src_ip, src_port, dst_ip, dst_port,
-		 first_seen, vendor, domain, uplink_bytes, downlink_bytes, total_bytes,
-		 request_count, packet_count, session_key, last_seen, updated_at, closed_at, status,
-		 src_user, src_hostname, src_department)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE
-		capture_job_id = VALUES(capture_job_id),
-		uplink_bytes = VALUES(uplink_bytes),
-		downlink_bytes = VALUES(downlink_bytes),
-		total_bytes = VALUES(total_bytes),
-		request_count = VALUES(request_count),
-		packet_count = VALUES(packet_count),
-		last_seen = VALUES(last_seen),
-		updated_at = VALUES(updated_at),
-		closed_at = VALUES(closed_at),
-		status = VALUES(status),
-		src_user = COALESCE(NULLIF(VALUES(src_user),''), src_user),
-		src_hostname = COALESCE(NULLIF(VALUES(src_hostname),''), src_hostname),
-		src_department = COALESCE(NULLIF(VALUES(src_department),''), src_department)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for _, r := range rows {
-		_, err := stmt.Exec(jobID, r.Iface, r.SrcIP, r.SrcPort, r.DstIP, r.DstPort,
-			r.FirstSeen, r.Vendor, r.Domain, r.UplinkBytes, r.DownlinkBytes, r.TotalBytes,
-			r.RequestCount, r.PacketCount, r.SessionKey, r.LastSeen, r.UpdatedAt, r.ClosedAt, r.Status,
-			r.SrcUser, r.SrcHostname, r.SrcDepartment)
-		if err != nil {
+	const batchSize = 50
+	for i := 0; i < len(rows); i += batchSize {
+		end := i + batchSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		if err := s.upsertSessionBatch(jobID, rows[i:end]); err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
-// InsertRequestLogs batch inserts request logs.
+func (s *Store) upsertSessionBatch(jobID int64, rows []*model.Session) error {
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO api_logs
+		(capture_job_id, iface, src_ip, src_port, dst_ip, dst_port,
+		 first_seen, vendor, domain, uplink_bytes, downlink_bytes, total_bytes,
+		 request_count, packet_count, session_key, last_seen, updated_at, closed_at, status,
+		 src_user, src_hostname, src_department) VALUES `)
+	args := make([]interface{}, 0, len(rows)*22)
+	for i, r := range rows {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+		args = append(args, jobID, r.Iface, r.SrcIP, r.SrcPort, r.DstIP, r.DstPort,
+			r.FirstSeen, r.Vendor, r.Domain, r.UplinkBytes, r.DownlinkBytes, r.TotalBytes,
+			r.RequestCount, r.PacketCount, r.SessionKey, r.LastSeen, r.UpdatedAt, r.ClosedAt, r.Status,
+			r.SrcUser, r.SrcHostname, r.SrcDepartment)
+	}
+	sb.WriteString(` ON DUPLICATE KEY UPDATE
+		capture_job_id=VALUES(capture_job_id),
+		uplink_bytes=VALUES(uplink_bytes), downlink_bytes=VALUES(downlink_bytes),
+		total_bytes=VALUES(total_bytes), request_count=VALUES(request_count),
+		packet_count=VALUES(packet_count), last_seen=VALUES(last_seen),
+		updated_at=VALUES(updated_at), closed_at=VALUES(closed_at), status=VALUES(status),
+		src_user=COALESCE(NULLIF(VALUES(src_user),''),src_user),
+		src_hostname=COALESCE(NULLIF(VALUES(src_hostname),''),src_hostname),
+		src_department=COALESCE(NULLIF(VALUES(src_department),''),src_department)`)
+	_, err := s.DB.Exec(sb.String(), args...)
+	return err
+}
+
+// InsertRequestLogs batch inserts request logs using multi-row INSERT.
 func (s *Store) InsertRequestLogs(jobID int64, rows []*model.RequestLog) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return err
+	const batchSize = 100
+	for i := 0; i < len(rows); i += batchSize {
+		end := i + batchSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		if err := s.insertRequestLogBatch(jobID, rows[i:end]); err != nil {
+			return err
+		}
 	}
-	defer tx.Rollback()
+	return nil
+}
 
-	stmt, err := tx.Prepare(`INSERT INTO request_logs
+func (s *Store) insertRequestLogBatch(jobID int64, rows []*model.RequestLog) error {
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO request_logs
 		(capture_job_id, request_key, session_key, iface, src_ip, src_port,
 		 dst_ip, dst_port, seen_at, vendor, domain,
 		 uplink_bytes, downlink_bytes, total_bytes, request_count,
-		 src_user, src_hostname, src_department)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE
-		uplink_bytes = VALUES(uplink_bytes),
-		downlink_bytes = VALUES(downlink_bytes),
-		total_bytes = VALUES(total_bytes),
-		src_user = COALESCE(NULLIF(VALUES(src_user),''), src_user),
-		src_hostname = COALESCE(NULLIF(VALUES(src_hostname),''), src_hostname),
-		src_department = COALESCE(NULLIF(VALUES(src_department),''), src_department)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for _, r := range rows {
-		r.CaptureJobID = jobID
-		_, err := stmt.Exec(r.CaptureJobID, r.RequestKey, r.SessionKey,
+		 src_user, src_hostname, src_department) VALUES `)
+	args := make([]interface{}, 0, len(rows)*18)
+	for i, r := range rows {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+		args = append(args, jobID, r.RequestKey, r.SessionKey,
 			r.Iface, r.SrcIP, r.SrcPort, r.DstIP, r.DstPort,
 			r.SeenAt, r.Vendor, r.Domain,
 			r.UplinkBytes, r.DownlinkBytes, r.TotalBytes, r.RequestCount,
 			r.SrcUser, r.SrcHostname, r.SrcDepartment)
-		if err != nil {
-			return err
-		}
 	}
-	return tx.Commit()
+	sb.WriteString(` ON DUPLICATE KEY UPDATE
+		uplink_bytes=VALUES(uplink_bytes), downlink_bytes=VALUES(downlink_bytes),
+		total_bytes=VALUES(total_bytes),
+		src_user=COALESCE(NULLIF(VALUES(src_user),''),src_user),
+		src_hostname=COALESCE(NULLIF(VALUES(src_hostname),''),src_hostname),
+		src_department=COALESCE(NULLIF(VALUES(src_department),''),src_department)`)
+	_, err := s.DB.Exec(sb.String(), args...)
+	return err
 }
 
-// InsertTransportEvents batch inserts transport events.
+// InsertTransportEvents batch inserts transport events using multi-row INSERT.
 func (s *Store) InsertTransportEvents(jobID int64, rows []*model.TransportEvent) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	stmt, err := tx.Prepare(`INSERT INTO transport_events
-		(capture_job_id, iface, src_ip, src_port, dst_ip, dst_port,
-		 protocol, note, first_seen, last_seen, packet_count, total_bytes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for _, r := range rows {
-		r.CaptureJobID = jobID
-		_, err := stmt.Exec(r.CaptureJobID, r.Iface, r.SrcIP, r.SrcPort,
-			r.DstIP, r.DstPort, r.Protocol, r.Note,
-			r.FirstSeen, r.LastSeen, r.PacketCount, r.TotalBytes)
-		if err != nil {
+	const batchSize = 200
+	for i := 0; i < len(rows); i += batchSize {
+		end := i + batchSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		if err := s.insertTransportBatch(jobID, rows[i:end]); err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
+}
+
+func (s *Store) insertTransportBatch(jobID int64, rows []*model.TransportEvent) error {
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO transport_events
+		(capture_job_id, iface, src_ip, src_port, dst_ip, dst_port,
+		 protocol, note, first_seen, last_seen, packet_count, total_bytes) VALUES `)
+	args := make([]interface{}, 0, len(rows)*12)
+	for i, r := range rows {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString("(?,?,?,?,?,?,?,?,?,?,?,?)")
+		args = append(args, jobID, r.Iface, r.SrcIP, r.SrcPort,
+			r.DstIP, r.DstPort, r.Protocol, r.Note,
+			r.FirstSeen, r.LastSeen, r.PacketCount, r.TotalBytes)
+	}
+	_, err := s.DB.Exec(sb.String(), args...)
+	return err
 }
 
 // LoadTargetRules loads enabled target rules from DB.

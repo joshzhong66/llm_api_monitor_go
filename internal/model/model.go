@@ -77,6 +77,21 @@ type TransportEvent struct {
 	TotalBytes   int64  `json:"total_bytes" db:"total_bytes"`
 }
 
+// QUICObservation is an in-memory hint record for UDP/443 traffic such as Grok web traffic.
+type QUICObservation struct {
+	SeenAt     string `json:"seen_at"`
+	Iface      string `json:"iface"`
+	SrcIP      string `json:"src_ip"`
+	SrcPort    int    `json:"src_port"`
+	DstIP      string `json:"dst_ip"`
+	DstPort    int    `json:"dst_port"`
+	Vendor     string `json:"vendor,omitempty"`
+	Domain     string `json:"domain,omitempty"`
+	Protocol   string `json:"protocol"`
+	Note       string `json:"note,omitempty"`
+	TotalBytes int64  `json:"total_bytes"`
+}
+
 // CaptureJob represents a pcap capture/parse job (maps to capture_jobs table).
 type CaptureJob struct {
 	ID                 int64  `json:"id" db:"id"`

@@ -33,6 +33,7 @@ type Engine struct {
 	flowMap  map[model.FlowKey]string // forward: (client→server) → session_key
 	revMap   map[model.FlowKey]string // reverse: (server→client) → session_key
 	ipHints  *IPHintCache
+	recentQUIC []model.QUICObservation
 	lastJobID int64
 }
 
@@ -221,6 +222,8 @@ func (e *Engine) MergeResult(parsed *model.ParseResult, jobID int64) *model.Merg
 
 		if evt.Protocol == "udp" {
 			if evt.SrcPort == 443 || evt.DstPort == 443 {
+				domain, vendor := e.lookupRegistrationHint(evt, parsed.PayloadHints)
+				e.recordQUICObservation(evt, domain, vendor)
 				te := e.recordTransportEvent(evt, now)
 				if te != nil {
 					transportEvents = append(transportEvents, te)
@@ -464,6 +467,52 @@ func (e *Engine) recordTransportEvent(evt *model.PacketEvent, now string) *model
 		PacketCount: 1,
 		TotalBytes:  int64(evt.Length),
 	}
+}
+
+func (e *Engine) recordQUICObservation(evt *model.PacketEvent, domain, vendor string) {
+	note := "udp/443"
+	if evt.Protocol != "udp" {
+		note = evt.Protocol + "/443"
+	}
+	obs := model.QUICObservation{
+		SeenAt:     model.EpochToLocalText(evt.Epoch),
+		Iface:      e.cfg.Iface,
+		SrcIP:      evt.SrcIP,
+		SrcPort:    evt.SrcPort,
+		DstIP:      evt.DstIP,
+		DstPort:    evt.DstPort,
+		Vendor:     vendor,
+		Domain:     domain,
+		Protocol:   evt.Protocol,
+		Note:       note,
+		TotalBytes: int64(evt.Length),
+	}
+	e.recentQUIC = append(e.recentQUIC, obs)
+	if len(e.recentQUIC) > 200 {
+		e.recentQUIC = append([]model.QUICObservation(nil), e.recentQUIC[len(e.recentQUIC)-200:]...)
+	}
+}
+
+// RecentQUICObservations returns the newest in-memory UDP/443 observations.
+func (e *Engine) RecentQUICObservations(limit int) []model.QUICObservation {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if len(e.recentQUIC) == 0 {
+		return nil
+	}
+	start := len(e.recentQUIC) - limit
+	if start < 0 {
+		start = 0
+	}
+	out := make([]model.QUICObservation, 0, len(e.recentQUIC)-start)
+	for i := len(e.recentQUIC) - 1; i >= start; i-- {
+		out = append(out, e.recentQUIC[i])
+	}
+	return out
 }
 
 // extractSNI extracts the Server Name Indication from a TLS ClientHello.
