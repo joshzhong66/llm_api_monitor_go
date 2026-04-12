@@ -830,7 +830,14 @@ func (s *Store) AddTargetRules(vendor string, domains []string, matchType string
 var WebDomainHints = []string{
 	"aistudio.google.com", "chat.openai.com", "chatgpt.com", "claude.ai",
 	"gemini.google.com", "grok.com", "kimi.com", "kimi.moonshot.cn",
-	"qwen.ai", "tongyi.aliyun.com",
+	"platform.deepseek.com", "qwen.ai", "tongyi.aliyun.com",
+}
+
+// WebMixedDomains are API domains that also carry web browser traffic.
+// They are included when querying "web" channel_class to show Gemini web usage etc.
+var WebMixedDomains = []string{
+	"aiplatform.googleapis.com",
+	"generativelanguage.googleapis.com",
 }
 
 // helper: build WHERE clause for api_logs
@@ -909,8 +916,19 @@ func applyChannelClass(clauses *[]string, args *[]interface{}, columnName, chann
 	if channelClass != "api" && channelClass != "web" {
 		return
 	}
-	placeholders := make([]string, len(WebDomainHints))
-	for i := range WebDomainHints {
+
+	// For "web": include WebDomainHints + WebMixedDomains
+	// For "api": exclude only WebDomainHints (mixed domains stay in API view too)
+	var domains []string
+	if channelClass == "web" {
+		domains = append(domains, WebDomainHints...)
+		domains = append(domains, WebMixedDomains...)
+	} else {
+		domains = WebDomainHints
+	}
+
+	placeholders := make([]string, len(domains))
+	for i := range domains {
 		placeholders[i] = "?"
 	}
 	ph := strings.Join(placeholders, ",")
@@ -919,7 +937,7 @@ func applyChannelClass(clauses *[]string, args *[]interface{}, columnName, chann
 	} else {
 		*clauses = append(*clauses, fmt.Sprintf("(%s NOT IN (%s) OR %s IS NULL OR %s = '')", columnName, ph, columnName, columnName))
 	}
-	for _, d := range WebDomainHints {
+	for _, d := range domains {
 		*args = append(*args, d)
 	}
 }

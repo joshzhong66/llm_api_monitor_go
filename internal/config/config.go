@@ -165,6 +165,7 @@ func Load(envPath string) *Config {
 			"aistudio.google.com": true,
 			"kimi.com":           true,
 			"kimi.moonshot.cn":   true,
+			"platform.deepseek.com": true,
 			"qwen.ai":            true,
 			"tongyi.aliyun.com":  true,
 			"grok.com":           true,
