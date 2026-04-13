@@ -204,3 +204,5 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 - `scripts/ip_user_map.json` 由 Go 服务每 5 分钟热加载，无需重启
 - 解析后的 pcap 默认自动删除（`RETAIN_PARSED_PCAP=0`），节省磁盘
 - Grok 使用 QUIC/HTTP3（UDP/443），目前只记录到 transport_events，不进入 api_logs
+- **capture_jobs 的 status 字段**：Writer 完成后设为 `merged`。`applyTimeWindow` 子查询按 `status='merged'` 过滤。如果改动 status 生命周期（如重命名状态值），必须同步修改 `applyTimeWindow`、`QueryPipelineStatus` 和 Writer daemon 的 `UpdateJob` 调用，否则时间窗口查询会返回 0 条数据
+- **Python 旧项目已删除**（2026-04-13）：`/root/llm_api_monitor` 目录和 systemd 服务已清理，crontab 路径已改指 Go 项目。`/root/llm_api_monitor_enp1s0f0`（enp1s0f0 网卡监控 10.20.3.150）保留运行
