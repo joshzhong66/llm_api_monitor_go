@@ -970,7 +970,7 @@ func applyTimeWindow(clauses *[]string, args *[]interface{}, jobColumnName strin
 	}
 	cutoff := time.Now().UTC().Add(8 * time.Hour).Add(-time.Duration(timeWindowMinutes) * time.Minute).Format("2006-01-02 15:04:05")
 	*clauses = append(*clauses, fmt.Sprintf("%s IN (SELECT id FROM capture_jobs WHERE status = ? AND analysis_finished_at >= ?)", jobColumnName))
-	*args = append(*args, "parsed", cutoff)
+	*args = append(*args, "merged", cutoff)
 }
 
 // applyDateRange adds start_date / end_date filters on a timestamp column.
