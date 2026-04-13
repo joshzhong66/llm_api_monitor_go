@@ -131,7 +131,7 @@ func (d *Daemon) processResult(wr *WorkerResult) error {
 	message := fmt.Sprintf("parsed %d packets, touched %d sessions, requests %d, active %d",
 		stats.PacketCount, len(stats.TouchedSessions), len(stats.RequestLogs), d.engine.ActiveSessions())
 
-	err := d.store.UpdateJob(jobID, stats.FinishedAt, stats.PacketCount, "parsed", message, stats.StartedAt)
+	err := d.store.UpdateJob(jobID, stats.FinishedAt, stats.PacketCount, "merged", message, stats.StartedAt)
 	if err != nil {
 		log.Printf("[writer] update job error: %v", err)
 	}
