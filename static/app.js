@@ -857,8 +857,10 @@ function renderInterfaceTraffic() {
     : `接口 ${payload.iface || '-'} 暂时无法获取实时流量`;
   document.getElementById('interfaceTrafficHint').textContent = interfaceTrafficHintText(payload);
   document.getElementById('interfaceTrafficTotals').innerHTML = [
-    `<article class="traffic-metric-card"><p>总发送速率</p><strong>${escapeHtml(payload.total_send || '0b')}</strong></article>`,
-    `<article class="traffic-metric-card"><p>总接收速率</p><strong>${escapeHtml(payload.total_recv || '0b')}</strong></article>`,
+    `<article class="traffic-metric-card"><p>网卡接收速率 (RX)</p><strong>${escapeHtml(payload.rx_rate || '0b')}</strong></article>`,
+    `<article class="traffic-metric-card"><p>网卡发送速率 (TX)</p><strong>${escapeHtml(payload.tx_rate || '0b')}</strong></article>`,
+    `<article class="traffic-metric-card"><p>iftop 接收合计</p><strong>${escapeHtml(payload.iftop_recv || '0b')}</strong></article>`,
+    `<article class="traffic-metric-card"><p>iftop 发送合计</p><strong>${escapeHtml(payload.iftop_send || '0b')}</strong></article>`,
   ].join('');
   const body = document.getElementById('interfaceTrafficBody');
   if (!rows.length) {

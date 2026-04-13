@@ -421,6 +421,9 @@ func (s *Server) handleInterfaceTraffic(w http.ResponseWriter, r *http.Request) 
 		iftopBin = "/usr/sbin/iftop"
 	}
 
+	// Sample /proc/net/dev before and after iftop for real throughput
+	rxBefore, txBefore := readIfaceCounters(iface)
+
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(sampleSec+5)*time.Second)
 	defer cancel()
 
@@ -432,16 +435,63 @@ func (s *Server) handleInterfaceTraffic(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	flows, totalSend, totalRecv := parseIftopOutput(string(output), maxFlows)
+	rxAfter, txAfter := readIfaceCounters(iface)
+
+	// Calculate real throughput (bits per second)
+	rxRate := formatBitsRate(rxAfter-rxBefore, sampleSec)
+	txRate := formatBitsRate(txAfter-txBefore, sampleSec)
+
+	flows, iftopSend, iftopRecv := parseIftopOutput(string(output), maxFlows)
 
 	s.jsonResponse(w, map[string]interface{}{"ok": true, "data": map[string]interface{}{
-		"flows":        flows,
-		"iface":        iface,
+		"flows":          flows,
+		"iface":          iface,
 		"sample_seconds": sampleSec,
-		"total_send":   totalSend,
-		"total_recv":   totalRecv,
-		"captured_at":  time.Now().UTC().Add(8 * time.Hour).Format("2006-01-02 15:04:05"),
+		"rx_rate":        rxRate,
+		"tx_rate":        txRate,
+		"iftop_send":     iftopSend,
+		"iftop_recv":     iftopRecv,
+		"captured_at":    time.Now().UTC().Add(8 * time.Hour).Format("2006-01-02 15:04:05"),
 	}}, 200)
+}
+
+func readIfaceCounters(iface string) (rx, tx uint64) {
+	data, err := os.ReadFile("/proc/net/dev")
+	if err != nil {
+		return 0, 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, iface+":") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 10 {
+			return 0, 0
+		}
+		// fields[0] = "iface:", fields[1] = RX bytes, fields[9] = TX bytes
+		rx, _ = strconv.ParseUint(fields[1], 10, 64)
+		tx, _ = strconv.ParseUint(fields[9], 10, 64)
+		return rx, tx
+	}
+	return 0, 0
+}
+
+func formatBitsRate(bytes uint64, seconds int) string {
+	if seconds <= 0 {
+		seconds = 1
+	}
+	bitsPerSec := float64(bytes) * 8 / float64(seconds)
+	switch {
+	case bitsPerSec >= 1e9:
+		return fmt.Sprintf("%.1fGb", bitsPerSec/1e9)
+	case bitsPerSec >= 1e6:
+		return fmt.Sprintf("%.1fMb", bitsPerSec/1e6)
+	case bitsPerSec >= 1e3:
+		return fmt.Sprintf("%.1fKb", bitsPerSec/1e3)
+	default:
+		return fmt.Sprintf("%.0fb", bitsPerSec)
+	}
 }
 
 func parseIftopOutput(output string, maxFlows int) ([]map[string]interface{}, string, string) {
