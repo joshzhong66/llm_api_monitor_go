@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -404,11 +406,142 @@ func (s *Server) handleInterfaceTraffic(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	// Placeholder: iftop integration
+
+	iface := s.cfg.Iface
+	sampleSec := s.cfg.IftopSampleSeconds
+	if sampleSec <= 0 {
+		sampleSec = 2
+	}
+	maxFlows := s.cfg.IftopMaxFlows
+	if maxFlows <= 0 {
+		maxFlows = 20
+	}
+	iftopBin := s.cfg.IftopBinary
+	if iftopBin == "" {
+		iftopBin = "/usr/sbin/iftop"
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(sampleSec+5)*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, iftopBin, "-i", iface, "-t", "-s", fmt.Sprintf("%d", sampleSec), "-n", "-N", "-P")
+	output, err := cmd.Output()
+	if err != nil {
+		log.Printf("[api] iftop error: %v", err)
+		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": "iftop failed: " + err.Error()}, 500)
+		return
+	}
+
+	flows, totalSend, totalRecv := parseIftopOutput(string(output), maxFlows)
+
 	s.jsonResponse(w, map[string]interface{}{"ok": true, "data": map[string]interface{}{
-		"flows": []interface{}{},
-		"iface": s.cfg.Iface,
+		"flows":        flows,
+		"iface":        iface,
+		"sample_seconds": sampleSec,
+		"total_send":   totalSend,
+		"total_recv":   totalRecv,
+		"captured_at":  time.Now().UTC().Add(8 * time.Hour).Format("2006-01-02 15:04:05"),
 	}}, 200)
+}
+
+func parseIftopOutput(output string, maxFlows int) ([]map[string]interface{}, string, string) {
+	lines := strings.Split(output, "\n")
+	var flows []map[string]interface{}
+	totalSend, totalRecv := "", ""
+
+	i := 0
+	for i < len(lines) {
+		line := strings.TrimSpace(lines[i])
+
+		// Parse total lines
+		if strings.HasPrefix(line, "Total send rate:") {
+			parts := strings.Fields(line)
+			if len(parts) >= 4 {
+				totalSend = parts[3]
+			}
+			i++
+			continue
+		}
+		if strings.HasPrefix(line, "Total receive rate:") {
+			parts := strings.Fields(line)
+			if len(parts) >= 4 {
+				totalRecv = parts[3]
+			}
+			i++
+			continue
+		}
+
+		// Parse flow pairs: line with => (send) followed by line with <= (recv)
+		if !strings.Contains(line, "=>") {
+			i++
+			continue
+		}
+		if i+1 >= len(lines) {
+			i++
+			continue
+		}
+		recvLine := strings.TrimSpace(lines[i+1])
+		if !strings.Contains(recvLine, "<=") {
+			i++
+			continue
+		}
+
+		// Parse send line: "1 10.30.50.59:52210  =>  132Kb  132Kb  132Kb  33.0KB"
+		sendParts := strings.Fields(line)
+		recvParts := strings.Fields(recvLine)
+
+		if len(sendParts) < 4 || len(recvParts) < 4 {
+			i += 2
+			continue
+		}
+
+		// Find host:port and rate
+		sendIdx := 0
+		for si, sp := range sendParts {
+			if sp == "=>" {
+				sendIdx = si
+				break
+			}
+		}
+		recvIdx := 0
+		for ri, rp := range recvParts {
+			if rp == "<=" {
+				recvIdx = ri
+				break
+			}
+		}
+
+		localAddr := ""
+		if sendIdx > 0 {
+			localAddr = sendParts[sendIdx-1]
+		}
+		remoteAddr := ""
+		if recvIdx > 0 {
+			remoteAddr = recvParts[recvIdx-1]
+		}
+		sendRate := ""
+		if sendIdx+1 < len(sendParts) {
+			sendRate = sendParts[sendIdx+1]
+		}
+		recvRate := ""
+		if recvIdx+1 < len(recvParts) {
+			recvRate = recvParts[recvIdx+1]
+		}
+
+		flows = append(flows, map[string]interface{}{
+			"local":     localAddr,
+			"remote":    remoteAddr,
+			"send_rate": sendRate,
+			"recv_rate": recvRate,
+		})
+
+		if len(flows) >= maxFlows {
+			break
+		}
+		i += 2
+	}
+
+	return flows, totalSend, totalRecv
 }
 
 func (s *Server) handleQUICObservations(w http.ResponseWriter, r *http.Request) {

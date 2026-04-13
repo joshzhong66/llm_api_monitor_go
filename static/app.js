@@ -312,7 +312,7 @@ function quicRows() {
 }
 
 function interfaceTrafficRows() {
-  return state.interfaceTraffic.rows || [];
+  return state.interfaceTraffic.flows || [];
 }
 
 function searchMetaText(totalRows, matchedRows, keyword, pageText) {
@@ -852,29 +852,26 @@ function renderInterfaceTraffic() {
   if (root.classList.contains('hidden')) return;
   const payload = state.interfaceTraffic || emptyInterfaceTraffic();
   const rows = interfaceTrafficRows();
-  const totals = payload.totals || {};
-  document.getElementById('interfaceTrafficMeta').textContent = payload.available === false
-    ? `接口 ${payload.iface || '-'} 暂时无法获取实时流量`
-    : `接口 ${payload.iface || '-'}，最近 ${numberFmt(payload.sample_seconds || 0)} 秒窗口，Top ${numberFmt(rows.length)} 条`;
+  document.getElementById('interfaceTrafficMeta').textContent = rows.length
+    ? `接口 ${payload.iface || '-'}，采样 ${numberFmt(payload.sample_seconds || 0)} 秒，Top ${numberFmt(rows.length)} 条流量`
+    : `接口 ${payload.iface || '-'} 暂时无法获取实时流量`;
   document.getElementById('interfaceTrafficHint').textContent = interfaceTrafficHintText(payload);
   document.getElementById('interfaceTrafficTotals').innerHTML = [
-    iftopSummaryCard('总发送速率', totals.send_rate),
-    iftopSummaryCard('总接收速率', totals.receive_rate),
-    iftopSummaryCard('总收发速率', totals.combined_rate),
-    iftopSummaryCard('峰值速率', totals.peak_rate),
+    `<article class="traffic-metric-card"><p>总发送速率</p><strong>${escapeHtml(payload.total_send || '0b')}</strong></article>`,
+    `<article class="traffic-metric-card"><p>总接收速率</p><strong>${escapeHtml(payload.total_recv || '0b')}</strong></article>`,
   ].join('');
   const body = document.getElementById('interfaceTrafficBody');
   if (!rows.length) {
-    body.innerHTML = `<tr><td class="empty-cell" colspan="5">${payload.available === false ? escapeHtml(payload.message || 'iftop 采样失败') : '当前没有活跃流量'}</td></tr>`;
+    body.innerHTML = '<tr><td class="empty-cell" colspan="5">当前没有活跃流量</td></tr>';
     return;
   }
-  body.innerHTML = rows.map(row => `
+  body.innerHTML = rows.map((row, i) => `
     <tr>
-      <td>${numberFmt(row.rank)}</td>
-      <td class="mono">${escapeHtml(row.host_a)}</td>
-      <td class="mono">${escapeHtml(row.host_b)}</td>
-      <td>${iftopRateCell(`${escapeHtml(row.host_a)} ${escapeHtml(row.a_to_b.arrow)} ${escapeHtml(row.host_b)}`, row.a_to_b.rates)}</td>
-      <td>${iftopRateCell(`${escapeHtml(row.host_a)} ${escapeHtml(row.b_to_a.arrow)} ${escapeHtml(row.host_b)}`, row.b_to_a.rates)}</td>
+      <td>${i + 1}</td>
+      <td class="mono">${escapeHtml(row.local || '-')}</td>
+      <td class="mono">${escapeHtml(row.remote || '-')}</td>
+      <td>${escapeHtml(row.send_rate || '0b')}</td>
+      <td>${escapeHtml(row.recv_rate || '0b')}</td>
     </tr>
   `).join('');
 }
