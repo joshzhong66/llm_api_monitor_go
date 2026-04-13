@@ -674,3 +674,10 @@ tbody tr:hover {
   color: var(--muted);
   margin: 0;
 }
+.export-filter-label {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+  margin-right: 4px;
+  white-space: nowrap;
+}

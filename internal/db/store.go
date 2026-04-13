@@ -985,6 +985,176 @@ func applyDateRange(clauses *[]string, args *[]interface{}, timeColumn, startDat
 	}
 }
 
+// StreamExportLogs returns an open *sql.Rows for streaming CSV export (no LIMIT).
+// Caller MUST close the returned rows.
+func (s *Store) StreamExportLogs(vendor, search, channelClass string, minBytes int, startDate, endDate string) (*sql.Rows, int, error) {
+	where, args := buildLogFilters(vendor, search, channelClass, 0, startDate, endDate)
+	if minBytes > 0 {
+		if where == "" {
+			where = " WHERE downlink_bytes >= ?"
+		} else {
+			where += " AND downlink_bytes >= ?"
+		}
+		args = append(args, minBytes)
+	}
+
+	var total int
+	if err := s.DB.QueryRow("SELECT COUNT(*) FROM api_logs"+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	dataSQL := `SELECT id, capture_job_id, iface, src_ip, src_port, dst_ip, dst_port,
+		first_seen, vendor, domain, uplink_bytes, downlink_bytes, total_bytes,
+		request_count, packet_count, session_key, last_seen, updated_at,
+		COALESCE(closed_at,'') AS closed_at, status,
+		COALESCE(src_user,'') AS src_user, COALESCE(src_hostname,'') AS src_hostname,
+		COALESCE(src_department,'') AS src_department
+		FROM api_logs` + where + ` ORDER BY last_seen DESC, id DESC`
+	rows, err := s.DB.Query(dataSQL, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+// StreamExportRequestLogs returns an open *sql.Rows for streaming CSV export (no LIMIT).
+// Caller MUST close the returned rows.
+func (s *Store) StreamExportRequestLogs(vendor, search, channelClass string, minBytes int, startDate, endDate string) (*sql.Rows, int, error) {
+	where, args := buildRequestLogFilters(vendor, search, channelClass, 0, startDate, endDate)
+	if minBytes > 0 {
+		if where == "" {
+			where = " WHERE downlink_bytes >= ?"
+		} else {
+			where += " AND downlink_bytes >= ?"
+		}
+		args = append(args, minBytes)
+	}
+
+	var total int
+	if err := s.DB.QueryRow("SELECT COUNT(*) FROM request_logs"+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	dataSQL := `SELECT id, capture_job_id, request_key, session_key, iface,
+		src_ip, src_port, dst_ip, dst_port, seen_at, vendor, domain,
+		uplink_bytes, downlink_bytes, total_bytes, request_count,
+		COALESCE(src_user,'') AS src_user, COALESCE(src_hostname,'') AS src_hostname,
+		COALESCE(src_department,'') AS src_department
+		FROM request_logs` + where + ` ORDER BY seen_at DESC, id DESC`
+	rows, err := s.DB.Query(dataSQL, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+// QueryUserSummary returns per-user per-vendor per-domain aggregation (all rows, no pagination).
+// Sorting by cost is done in the API layer after enrichment.
+func (s *Store) QueryUserSummary(search, startDate, endDate string) ([]map[string]interface{}, error) {
+	where, args := buildUserSummaryFilters(search, startDate, endDate)
+
+	dataSQL := `SELECT
+		MAX(COALESCE(src_user,'')) AS src_user,
+		MAX(COALESCE(src_department,'')) AS src_department,
+		GROUP_CONCAT(DISTINCT src_ip ORDER BY src_ip SEPARATOR ', ') AS src_ip,
+		vendor, domain,
+		COUNT(*) AS session_count,
+		COALESCE(SUM(request_count),0) AS request_count,
+		COALESCE(SUM(uplink_bytes),0) AS uplink_bytes,
+		COALESCE(SUM(downlink_bytes),0) AS downlink_bytes,
+		COALESCE(SUM(total_bytes),0) AS total_bytes,
+		MIN(first_seen) AS first_seen,
+		MAX(COALESCE(last_seen, first_seen)) AS last_seen
+		FROM api_logs` + where + `
+		GROUP BY COALESCE(NULLIF(COALESCE(src_user,''),''), src_ip),
+			vendor, domain
+		ORDER BY SUM(total_bytes) DESC`
+
+	rows, err := s.DB.Query(dataSQL, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []map[string]interface{}
+	for rows.Next() {
+		var srcUser, srcDept, srcIP, vendor, domain, firstSeen, lastSeen string
+		var sessionCount, requestCount int
+		var uplinkBytes, downlinkBytes, totalBytes int64
+		if err := rows.Scan(&srcUser, &srcDept, &srcIP, &vendor, &domain,
+			&sessionCount, &requestCount, &uplinkBytes, &downlinkBytes, &totalBytes,
+			&firstSeen, &lastSeen); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]interface{}{
+			"src_user":       srcUser,
+			"src_department": srcDept,
+			"src_ip":         srcIP,
+			"vendor":         vendor,
+			"domain":         domain,
+			"session_count":  sessionCount,
+			"request_count":  requestCount,
+			"uplink_bytes":   uplinkBytes,
+			"downlink_bytes": downlinkBytes,
+			"total_bytes":    totalBytes,
+			"first_seen":     firstSeen,
+			"last_seen":      lastSeen,
+		})
+	}
+
+	return items, nil
+}
+
+// StreamExportUserSummary returns open *sql.Rows for streaming CSV export.
+func (s *Store) StreamExportUserSummary(search, startDate, endDate string) (*sql.Rows, int, error) {
+	where, args := buildUserSummaryFilters(search, startDate, endDate)
+
+	var total int
+	countSQL := "SELECT COUNT(*) FROM (SELECT 1 FROM api_logs" + where + " GROUP BY COALESCE(NULLIF(COALESCE(src_user,''),''), src_ip), vendor, domain) t"
+	if err := s.DB.QueryRow(countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	dataSQL := `SELECT
+		MAX(COALESCE(src_user,'')) AS src_user,
+		MAX(COALESCE(src_department,'')) AS src_department,
+		GROUP_CONCAT(DISTINCT src_ip ORDER BY src_ip SEPARATOR ', ') AS src_ip,
+		vendor, domain,
+		COUNT(*) AS session_count,
+		COALESCE(SUM(request_count),0) AS request_count,
+		COALESCE(SUM(uplink_bytes),0) AS uplink_bytes,
+		COALESCE(SUM(downlink_bytes),0) AS downlink_bytes,
+		COALESCE(SUM(total_bytes),0) AS total_bytes,
+		MIN(first_seen) AS first_seen,
+		MAX(COALESCE(last_seen, first_seen)) AS last_seen
+		FROM api_logs` + where + `
+		GROUP BY COALESCE(NULLIF(COALESCE(src_user,''),''), src_ip),
+			vendor, domain
+		ORDER BY SUM(total_bytes) DESC`
+	rows, err := s.DB.Query(dataSQL, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+func buildUserSummaryFilters(search, startDate, endDate string) (string, []interface{}) {
+	var clauses []string
+	var args []interface{}
+	if search != "" {
+		clauses = append(clauses, "(COALESCE(src_user,'') LIKE ? OR src_ip LIKE ? OR vendor LIKE ? OR domain LIKE ? OR COALESCE(src_department,'') LIKE ?)")
+		s := "%" + search + "%"
+		args = append(args, s, s, s, s, s)
+	}
+	if startDate != "" || endDate != "" {
+		applyDateRange(&clauses, &args, "COALESCE(last_seen, first_seen)", startDate, endDate)
+	}
+	if len(clauses) == 0 {
+		return "", nil
+	}
+	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
 func sessionToMap(s *model.Session) map[string]interface{} {
 	return map[string]interface{}{
 		"capture_job_id": s.CaptureJobID,

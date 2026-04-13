@@ -22,6 +22,7 @@ const ORDERED_VENDORS = [
 const NAV_ITEMS = [
   {id: 'apiSummary', label: 'API 消费汇总'},
   {id: 'webSummary', label: '网页消费汇总'},
+  {id: 'userSummary', label: '用户消费汇总'},
   {id: 'apiSessions', label: 'API 会话日志'},
   {id: 'webSessions', label: '网页会话日志'},
   {id: 'apiRequests', label: 'API 请求明细'},
@@ -36,8 +37,10 @@ const SEARCH_DEBOUNCE_MS = 300;
 const SESSION_PAGE_SIZE = 50;
 const REQUEST_PAGE_SIZE = 100;
 const QUIC_PAGE_SIZE = 100;
-const REQUEST_TIMEOUT_MS = 10000;
+const REQUEST_TIMEOUT_MS = 60000;
 const EXPORT_PAGE_SIZE = 1000;
+const USER_SUMMARY_PAGE_SIZE = 100;
+const STREAM_EXPORT_THRESHOLD = 5000;
 const TIME_RANGE_OPTIONS = [
   {value: 5, label: '最近5分钟'},
   {value: 10, label: '近10分钟'},
@@ -78,6 +81,7 @@ const state = {
   status: null,
   pipeline: null,
   summary: [],
+  userSummaryPage: emptyPaged(USER_SUMMARY_PAGE_SIZE),
   logsPage: emptyPaged(SESSION_PAGE_SIZE),
   requestLogsPage: emptyPaged(REQUEST_PAGE_SIZE),
   transportEventsPage: emptyPaged(QUIC_PAGE_SIZE),
@@ -91,12 +95,14 @@ const state = {
     quic: false,
     interfaceTraffic: false,
     targets: false,
+    userSummary: false,
   },
   search: {
     summary: '',
     sessions: '',
     requests: '',
     quic: '',
+    userSummary: '',
   },
   hideEmpty: {
     sessions: true,
@@ -108,11 +114,13 @@ const state = {
     apiRequests: 1,
     webRequests: 1,
     quic: 1,
+    userSummary: 1,
   },
   timeRanges: {
     sessions: 5,
     requests: 5,
     quic: 5,
+    userSummary: 5,
   },
   requestSeq: {
     apiSessions: 0,
@@ -121,6 +129,7 @@ const state = {
     webRequests: 0,
     quic: 0,
     interfaceTraffic: 0,
+    userSummary: 0,
   },
 };
 
@@ -159,6 +168,7 @@ function viewGroup(view) {
   if (view === 'quic') return 'quic';
   if (view === 'interfaceTraffic') return 'interfaceTraffic';
   if (view === 'targets') return 'targets';
+  if (view === 'userSummary') return 'userSummary';
   return 'summary';
 }
 
@@ -699,6 +709,9 @@ function renderTimeRangeFilters(hostId, group, options) {
       if (nextGroup === 'quic') {
         state.pagination.quic = 1;
       }
+      if (nextGroup === 'userSummary') {
+        state.pagination.userSummary = 1;
+      }
       renderAll();
       refreshViewData(state.selectedView, true).then(renderAll).catch(() => renderAll());
     });
@@ -961,12 +974,46 @@ async function fetchAllPagedRows(view, pageSize, startDate, endDate) {
   return items;
 }
 
+function buildExportQuery(exportType) {
+  const {startDate, endDate} = getExportDateRange();
+  const view = state.selectedView;
+  const channelClass = viewChannelClass(view);
+  const group = viewGroup(view);
+  const hideKey = isSessionView(view) ? 'sessions' : 'requests';
+  return buildQuery({
+    type: exportType,
+    vendor: state.selectedVendor === '全部' ? '' : state.selectedVendor,
+    channel_class: channelClass,
+    time_window_minutes: (startDate || endDate) ? 0 : state.timeRanges[group],
+    search: state.search[group] || '',
+    min_bytes: state.hideEmpty[hideKey] ? 1 : 0,
+    start_date: startDate,
+    end_date: endDate,
+  });
+}
+
+function streamExport(exportType) {
+  const qs = buildExportQuery(exportType);
+  const url = `/api/export-csv${qs}`;
+  showToast('正在生成导出文件，请稍候...', 'info');
+  window.open(url, '_blank');
+}
+
 async function exportSessionCsv() {
+  // Check total to decide streaming vs client-side
+  const payload = state.logsPage;
+  const total = payload ? payload.total : 0;
+  if (total > STREAM_EXPORT_THRESHOLD) {
+    streamExport('logs');
+    return;
+  }
   const {startDate, endDate} = getExportDateRange();
   const items = await fetchAllPagedRows(state.selectedView, EXPORT_PAGE_SIZE, startDate, endDate);
   const rows = items.map(row => [
     row.iface,
     row.src_ip,
+    row.src_user || '',
+    row.src_department || '',
     row.first_seen || '',
     row.last_seen || '',
     channelLabel(row.channel_type),
@@ -982,16 +1029,24 @@ async function exportSessionCsv() {
     row.request_count,
   ]);
   const kind = state.selectedView === 'webSessions' ? 'web_session_log_all' : 'api_session_log_all';
-  downloadCsv(csvFilename(kind), ['抓包网卡', '源IP', '首次时间', '最近时间', '调用类型', '模型厂商', '访问域名', '上行流量', '下行流量', '总流量', '输入Token', '输出Token', '总Token', '预估金额USD', '请求次数'], rows);
+  downloadCsv(csvFilename(kind), ['抓包网卡', '源IP', '用户', '部门', '首次时间', '最近时间', '调用类型', '模型厂商', '访问域名', '上行流量', '下行流量', '总流量', '输入Token', '输出Token', '总Token', '预估金额USD', '请求次数'], rows);
   showToast(`已导出 ${rows.length} 条会话记录`, 'success');
 }
 
 async function exportRequestCsv() {
+  const payload = state.requestLogsPage;
+  const total = payload ? payload.total : 0;
+  if (total > STREAM_EXPORT_THRESHOLD) {
+    streamExport('request-logs');
+    return;
+  }
   const {startDate, endDate} = getExportDateRange();
   const items = await fetchAllPagedRows(state.selectedView, EXPORT_PAGE_SIZE, startDate, endDate);
   const rows = items.map(row => [
     row.iface,
     row.src_ip,
+    row.src_user || '',
+    row.src_department || '',
     row.seen_at || '',
     channelLabel(row.channel_type),
     row.vendor,
@@ -1006,8 +1061,62 @@ async function exportRequestCsv() {
     row.request_count,
   ]);
   const kind = state.selectedView === 'webRequests' ? 'web_request_detail_all' : 'api_request_detail_all';
-  downloadCsv(csvFilename(kind), ['抓包网卡', '源IP', '访问时间', '调用类型', '模型厂商', '访问域名', '上行流量', '下行流量', '总流量', '输入Token', '输出Token', '总Token', '预估金额USD', '请求次数'], rows);
+  downloadCsv(csvFilename(kind), ['抓包网卡', '源IP', '用户', '部门', '访问时间', '调用类型', '模型厂商', '访问域名', '上行流量', '下行流量', '总流量', '输入Token', '输出Token', '总Token', '预估金额USD', '请求次数'], rows);
   showToast(`已导出 ${rows.length} 条请求明细`, 'success');
+}
+
+async function exportUserSummaryCsv() {
+  const {startDate, endDate} = getExportDateRange();
+  const tw = (startDate || endDate) ? 0 : (state.timeRanges.userSummary || 0);
+  const qs = buildQuery({
+    type: 'user-summary',
+    search: state.search.userSummary || '',
+    time_window_minutes: tw,
+    start_date: startDate,
+    end_date: endDate,
+  });
+  const label = (startDate || endDate) ? '自定义时间' : timeRangeLabel(state.timeRanges.userSummary);
+  showToast(`正在导出${label}全部用户消费数据...`, 'info');
+  window.open(`/api/export-csv${qs}`, '_blank');
+}
+
+function renderUserSummary() {
+  const root = document.getElementById('userSummarySection');
+  root.classList.toggle('hidden', state.selectedView !== 'userSummary');
+  if (root.classList.contains('hidden')) return;
+  renderTimeRangeFilters('userSummaryTimeFilters', 'userSummary');
+  const payload = state.userSummaryPage;
+  const rows = payload.items || [];
+  const body = document.getElementById('userSummaryBody');
+  document.getElementById('userSummarySearchMeta').textContent = `${detailMetaText(payload, state.search.userSummary, false)}，时间范围 ${timeRangeLabel(state.timeRanges.userSummary)}`;
+  if (!rows.length) {
+    body.innerHTML = '<tr><td class="empty-cell" colspan="16">当前筛选条件下暂无用户消费记录</td></tr>';
+    renderPagination('userSummaryPagination', payload, 'userSummary', page => changePage('userSummary', page));
+    return;
+  }
+  body.innerHTML = rows.map(row => {
+    const userDisplay = row.src_user || 'N/A';
+    return `
+    <tr>
+      <td>${escapeHtml(userDisplay)}</td>
+      <td>${escapeHtml(row.src_department || '-')}</td>
+      <td class="mono">${escapeHtml(row.src_ip || '-')}</td>
+      <td><span class="vendor-tag">${escapeHtml(row.vendor)}</span></td>
+      <td>${escapeHtml(channelLabel(row.channel_type))}</td>
+      <td class="mono">${escapeHtml(row.domain)}</td>
+      <td>${numberFmt(row.request_count)}</td>
+      <td>${bytesFmt(row.uplink_bytes)}</td>
+      <td>${bytesFmt(row.downlink_bytes)}</td>
+      <td>${bytesFmt(row.total_bytes)}</td>
+      <td>${numberFmt(row.input_tokens)}</td>
+      <td>${numberFmt(row.output_tokens)}</td>
+      <td>${numberFmt(row.total_tokens)}</td>
+      <td>${moneyFmt(estimatedCostValue(row))}</td>
+      <td>${escapeHtml(row.first_seen || '-')}</td>
+      <td>${escapeHtml(row.last_seen || '-')}</td>
+    </tr>`;
+  }).join('');
+  renderPagination('userSummaryPagination', payload, 'userSummary', page => changePage('userSummary', page));
 }
 
 function renderAll() {
@@ -1017,6 +1126,7 @@ function renderAll() {
   renderVendorFilters();
   renderSystemMeta();
   renderSummary();
+  renderUserSummary();
   renderSessionLogs();
   renderRequestLogs();
   renderQuicDiagnostics();
@@ -1170,6 +1280,26 @@ function buildViewRequest(view, overrides) {
       },
     };
   }
+  if (view === 'userSummary') {
+    const page = Number(opts.page || state.pagination.userSummary || 1);
+    const pageSize = Number(opts.pageSize || USER_SUMMARY_PAGE_SIZE);
+    return {
+      label: '用户消费汇总',
+      url: `/api/user-summary${buildQuery({
+        page,
+        page_size: pageSize,
+        search: state.search.userSummary,
+        time_window_minutes: state.timeRanges.userSummary,
+      })}`,
+      page,
+      pageSize,
+      assign(data) {
+        state.userSummaryPage = normalizePagedPayload(data, state.pagination.userSummary, USER_SUMMARY_PAGE_SIZE);
+        state.pagination.userSummary = state.userSummaryPage.page;
+        state.loadedViews.userSummary = true;
+      },
+    };
+  }
   return null;
 }
 
@@ -1180,16 +1310,17 @@ async function refreshViewData(view, force) {
   if (view === 'quic' && !force && state.loadedViews.quic) return;
   if (view === 'interfaceTraffic' && !force && state.loadedViews.interfaceTraffic) return;
   if (view === 'targets' && !force && state.loadedViews.targets) return;
+  if (view === 'userSummary' && !force && state.loadedViews.userSummary) return;
 
   const config = buildViewRequest(view);
   if (!config) return;
 
-  if (isSessionView(view) || isRequestView(view) || view === 'quic' || view === 'interfaceTraffic') {
-    state.requestSeq[view] += 1;
+  if (isSessionView(view) || isRequestView(view) || view === 'quic' || view === 'interfaceTraffic' || view === 'userSummary') {
+    state.requestSeq[view] = (state.requestSeq[view] || 0) + 1;
   }
   const seq = state.requestSeq[view] || 0;
   const result = await settledRequest(config.label, config.url);
-  if ((isSessionView(view) || isRequestView(view) || view === 'quic' || view === 'interfaceTraffic') && seq !== state.requestSeq[view]) {
+  if ((isSessionView(view) || isRequestView(view) || view === 'quic' || view === 'interfaceTraffic' || view === 'userSummary') && seq !== state.requestSeq[view]) {
     return;
   }
 
@@ -1243,6 +1374,7 @@ async function addTargetRule(event) {
 function changePage(view, page) {
   if (isSessionView(view) || isRequestView(view)) state.pagination[view] = Math.max(1, page);
   if (view === 'quic') state.pagination.quic = Math.max(1, page);
+  if (view === 'userSummary') state.pagination.userSummary = Math.max(1, page);
   refreshViewData(view, true).then(renderAll).catch(() => renderAll());
 }
 
@@ -1263,6 +1395,7 @@ function bindSearchInput(elementId, key) {
       state.pagination.webRequests = 1;
     }
     if (key === 'quic') state.pagination.quic = 1;
+    if (key === 'userSummary') state.pagination.userSummary = 1;
     renderAll();
     if (searchTimers[key]) clearTimeout(searchTimers[key]);
     searchTimers[key] = setTimeout(() => {
@@ -1310,6 +1443,10 @@ bindSearchInput('summarySearchInput', 'summary');
 bindSearchInput('sessionSearchInput', 'sessions');
 bindSearchInput('requestSearchInput', 'requests');
 bindSearchInput('quicSearchInput', 'quic');
+bindSearchInput('userSummarySearchInput', 'userSummary');
+document.getElementById('exportUserSummaryBtn').addEventListener('click', () => {
+  exportUserSummaryCsv();
+});
 
 // Hide empty sessions toggle
 function bindHideEmpty(checkboxId, group) {

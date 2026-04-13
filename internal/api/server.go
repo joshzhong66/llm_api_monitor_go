@@ -10,10 +10,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"llm_api_monitor/internal/config"
 	"llm_api_monitor/internal/db"
+	"llm_api_monitor/internal/model"
 	"llm_api_monitor/internal/parser"
 )
 
@@ -23,8 +25,13 @@ type Server struct {
 	store   *db.Store
 	engine  *parser.Engine
 	ipUsers *IPUserMap
-	started time.Time
-	mux     *http.ServeMux
+	started      time.Time
+	mux          *http.ServeMux
+	summaryCache struct {
+		mu      sync.Mutex
+		data    []map[string]interface{}
+		updated time.Time
+	}
 }
 
 const maxPageSize = 10000
@@ -61,6 +68,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/pipeline", s.handlePipeline)
 	s.mux.HandleFunc("/api/quic-observations", s.handleQUICObservations)
 	s.mux.HandleFunc("/api/interface-traffic", s.handleInterfaceTraffic)
+	s.mux.HandleFunc("/api/export-csv", s.handleExportCSV)
+	s.mux.HandleFunc("/api/user-summary", s.handleUserSummary)
 
 	// Static files
 	staticDir := s.cfg.StaticDir
@@ -164,6 +173,19 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	startDate := q.Get("start_date")
 	endDate := q.Get("end_date")
+
+	// Use in-memory cache for default (no date range) queries
+	if startDate == "" && endDate == "" {
+		s.summaryCache.mu.Lock()
+		if s.summaryCache.data != nil && time.Since(s.summaryCache.updated) < s.cfg.SummaryCacheTTL {
+			cached := s.summaryCache.data
+			s.summaryCache.mu.Unlock()
+			s.jsonResponse(w, map[string]interface{}{"ok": true, "data": cached}, 200)
+			return
+		}
+		s.summaryCache.mu.Unlock()
+	}
+
 	data, err := s.store.QuerySummary(startDate, endDate)
 	if err != nil {
 		log.Printf("[api] query summary error: %v", err)
@@ -176,6 +198,14 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		enrichUsageMetrics(item, s.cfg)
 	}
 	sortSummaryRowsByConsumption(data)
+
+	// Cache default query results
+	if startDate == "" && endDate == "" {
+		s.summaryCache.mu.Lock()
+		s.summaryCache.data = data
+		s.summaryCache.updated = time.Now()
+		s.summaryCache.mu.Unlock()
+	}
 
 	s.jsonResponse(w, map[string]interface{}{"ok": true, "data": data}, 200)
 }
@@ -383,6 +413,339 @@ func (s *Server) handleQUICObservations(w http.ResponseWriter, r *http.Request) 
 	limit := queryInt(r.URL.Query(), "limit", 50)
 	data := s.engine.RecentQUICObservations(limit)
 	s.jsonResponse(w, map[string]interface{}{"ok": true, "data": data}, 200)
+}
+
+func (s *Server) handleExportCSV(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	// Extend write deadline to 10 minutes for large exports
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Minute))
+
+	q := r.URL.Query()
+	exportType := q.Get("type") // "logs" or "request-logs"
+	vendor := q.Get("vendor")
+	search := q.Get("search")
+	channelClass := q.Get("channel_class")
+	minBytes := queryInt(q, "min_bytes", 0)
+	startDate := q.Get("start_date")
+	endDate := q.Get("end_date")
+
+	if exportType != "logs" && exportType != "request-logs" && exportType != "user-summary" {
+		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": "type must be 'logs', 'request-logs' or 'user-summary'"}, 400)
+		return
+	}
+
+	// Convert time_window_minutes to start_date for user-summary export
+	timeWindow := queryInt(q, "time_window_minutes", 0)
+	if exportType == "user-summary" && startDate == "" && endDate == "" && timeWindow > 0 {
+		startDate = time.Now().UTC().Add(8 * time.Hour).Add(-time.Duration(timeWindow) * time.Minute).Format("2006-01-02 15:04:05")
+	}
+
+	now := time.Now().Format("2006-01-02_150405")
+	filename := fmt.Sprintf("%s_%s_%s.csv", now, channelClass, exportType)
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.Header().Set("Cache-Control", "no-store")
+
+	// Write BOM for Excel compatibility
+	w.Write([]byte("\xEF\xBB\xBF"))
+
+	flusher, _ := w.(http.Flusher)
+
+	if exportType == "logs" {
+		s.streamExportLogs(w, flusher, vendor, search, channelClass, minBytes, startDate, endDate)
+	} else if exportType == "request-logs" {
+		s.streamExportRequestLogs(w, flusher, vendor, search, channelClass, minBytes, startDate, endDate)
+	} else {
+		s.streamExportUserSummary(w, flusher, search, startDate, endDate)
+	}
+}
+
+func (s *Server) streamExportLogs(w http.ResponseWriter, flusher http.Flusher, vendor, search, channelClass string, minBytes int, startDate, endDate string) {
+	rows, total, err := s.store.StreamExportLogs(vendor, search, channelClass, minBytes, startDate, endDate)
+	if err != nil {
+		log.Printf("[api] export logs error: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	// Header
+	w.Write([]byte("抓包网卡,源IP,用户,部门,首次时间,最近时间,调用类型,模型厂商,访问域名,上行流量,下行流量,总流量,输入Token,输出Token,总Token,预估金额USD,请求次数\n"))
+	if flusher != nil {
+		flusher.Flush()
+	}
+
+	log.Printf("[api] streaming export logs: %d rows", total)
+	count := 0
+	for rows.Next() {
+		var id int64
+		var r struct {
+			CaptureJobID                                                                                                                            int
+			Iface, SrcIP, FirstSeen, Vendor, Domain, LastSeen, UpdatedAt, ClosedAt, Status, SessionKey, SrcUser, SrcHostname, SrcDepartment string
+			SrcPort, DstPort, RequestCount, PacketCount                                                                                     int
+			DstIP                                                                                                                           string
+			UplinkBytes, DownlinkBytes, TotalBytes                                                                                          int64
+		}
+		if err := rows.Scan(&id, &r.CaptureJobID, &r.Iface, &r.SrcIP, &r.SrcPort,
+			&r.DstIP, &r.DstPort, &r.FirstSeen, &r.Vendor, &r.Domain,
+			&r.UplinkBytes, &r.DownlinkBytes, &r.TotalBytes,
+			&r.RequestCount, &r.PacketCount, &r.SessionKey, &r.LastSeen,
+			&r.UpdatedAt, &r.ClosedAt, &r.Status,
+			&r.SrcUser, &r.SrcHostname, &r.SrcDepartment); err != nil {
+			log.Printf("[api] export scan error at row %d: %v", count, err)
+			return
+		}
+
+		// Enrich IP-user if DB fields are empty
+		user, department := r.SrcUser, r.SrcDepartment
+		if user == "" {
+			if entry := s.ipUsers.Lookup(r.SrcIP); entry != nil {
+				user = entry.Username
+				department = entry.Department
+			}
+		}
+
+		// Compute tokens/cost
+		m := map[string]interface{}{
+			"uplink_bytes":   r.UplinkBytes,
+			"downlink_bytes": r.DownlinkBytes,
+			"vendor":         r.Vendor,
+			"domain":         r.Domain,
+		}
+		enrichUsageMetrics(m, s.cfg)
+
+		line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%d,%d,%v,%v,%v,%v,%d\n",
+			csvField(r.Iface), csvField(r.SrcIP), csvField(user), csvField(department),
+			csvField(r.FirstSeen), csvField(r.LastSeen),
+			csvField(toString(m["channel_type"])),
+			csvField(r.Vendor), csvField(r.Domain),
+			r.UplinkBytes, r.DownlinkBytes, r.TotalBytes,
+			m["input_tokens"], m["output_tokens"], m["total_tokens"],
+			m["estimated_cost_usd"], r.RequestCount)
+		w.Write([]byte(line))
+		count++
+		if count%5000 == 0 && flusher != nil {
+			flusher.Flush()
+		}
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+	log.Printf("[api] export logs complete: %d rows written", count)
+}
+
+func (s *Server) streamExportRequestLogs(w http.ResponseWriter, flusher http.Flusher, vendor, search, channelClass string, minBytes int, startDate, endDate string) {
+	rows, total, err := s.store.StreamExportRequestLogs(vendor, search, channelClass, minBytes, startDate, endDate)
+	if err != nil {
+		log.Printf("[api] export request-logs error: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	// Header
+	w.Write([]byte("抓包网卡,源IP,用户,部门,访问时间,调用类型,模型厂商,访问域名,上行流量,下行流量,总流量,输入Token,输出Token,总Token,预估金额USD,请求次数\n"))
+	if flusher != nil {
+		flusher.Flush()
+	}
+
+	log.Printf("[api] streaming export request-logs: %d rows", total)
+	count := 0
+	for rows.Next() {
+		var r struct {
+			ID, CaptureJobID                                                                                           int
+			RequestKey, SessionKey, Iface, SrcIP, DstIP, SeenAt, Vendor, Domain, SrcUser, SrcHostname, SrcDepartment string
+			SrcPort, DstPort, RequestCount                                                                             int
+			UplinkBytes, DownlinkBytes, TotalBytes                                                                     int64
+		}
+		if err := rows.Scan(&r.ID, &r.CaptureJobID, &r.RequestKey, &r.SessionKey,
+			&r.Iface, &r.SrcIP, &r.SrcPort, &r.DstIP, &r.DstPort,
+			&r.SeenAt, &r.Vendor, &r.Domain,
+			&r.UplinkBytes, &r.DownlinkBytes, &r.TotalBytes, &r.RequestCount,
+			&r.SrcUser, &r.SrcHostname, &r.SrcDepartment); err != nil {
+			log.Printf("[api] export scan error at row %d: %v", count, err)
+			return
+		}
+
+		user, department := r.SrcUser, r.SrcDepartment
+		if user == "" {
+			if entry := s.ipUsers.Lookup(r.SrcIP); entry != nil {
+				user = entry.Username
+				department = entry.Department
+			}
+		}
+
+		m := map[string]interface{}{
+			"uplink_bytes":   r.UplinkBytes,
+			"downlink_bytes": r.DownlinkBytes,
+			"vendor":         r.Vendor,
+			"domain":         r.Domain,
+		}
+		enrichUsageMetrics(m, s.cfg)
+
+		line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s,%d,%d,%d,%v,%v,%v,%v,%d\n",
+			csvField(r.Iface), csvField(r.SrcIP), csvField(user), csvField(department),
+			csvField(r.SeenAt),
+			csvField(toString(m["channel_type"])),
+			csvField(r.Vendor), csvField(r.Domain),
+			r.UplinkBytes, r.DownlinkBytes, r.TotalBytes,
+			m["input_tokens"], m["output_tokens"], m["total_tokens"],
+			m["estimated_cost_usd"], r.RequestCount)
+		w.Write([]byte(line))
+		count++
+		if count%5000 == 0 && flusher != nil {
+			flusher.Flush()
+		}
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+	log.Printf("[api] export request-logs complete: %d rows written", count)
+}
+
+func (s *Server) streamExportUserSummary(w http.ResponseWriter, flusher http.Flusher, search, startDate, endDate string) {
+	rows, total, err := s.store.StreamExportUserSummary(search, startDate, endDate)
+	if err != nil {
+		log.Printf("[api] export user-summary error: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	w.Write([]byte("用户,部门,用户IP,模型厂商,调用类型,访问域名,会话数,请求次数,上行流量,下行流量,总流量,输入Token,输出Token,总Token,预估金额USD,首次访问时间,最后访问时间\n"))
+	if flusher != nil {
+		flusher.Flush()
+	}
+
+	log.Printf("[api] streaming export user-summary: %d rows", total)
+	count := 0
+	for rows.Next() {
+		var srcUser, srcDept, srcIP, vendor, domain, firstSeen, lastSeen string
+		var sessionCount, requestCount int
+		var uplinkBytes, downlinkBytes, totalBytes int64
+		if err := rows.Scan(&srcUser, &srcDept, &srcIP, &vendor, &domain,
+			&sessionCount, &requestCount, &uplinkBytes, &downlinkBytes, &totalBytes,
+			&firstSeen, &lastSeen); err != nil {
+			log.Printf("[api] export user-summary scan error at row %d: %v", count, err)
+			return
+		}
+
+		m := map[string]interface{}{
+			"uplink_bytes":   uplinkBytes,
+			"downlink_bytes": downlinkBytes,
+			"vendor":         vendor,
+			"domain":         domain,
+		}
+		enrichUsageMetrics(m, s.cfg)
+
+		// Enrich user from IPUserMap if DB field is empty
+		if srcUser == "" {
+			if entry := s.ipUsers.Lookup(srcIP); entry != nil && entry.Username != "" {
+				srcUser = entry.Username
+				srcDept = entry.Department
+			}
+		}
+		displayUser := srcUser
+		if displayUser == "" {
+			displayUser = "N/A"
+		}
+
+		line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%d,%d,%d,%d,%d,%v,%v,%v,%v,%s,%s\n",
+			csvField(displayUser), csvField(srcDept), csvField(srcIP),
+			csvField(vendor), csvField(toString(m["channel_type"])), csvField(domain),
+			sessionCount, requestCount,
+			uplinkBytes, downlinkBytes, totalBytes,
+			m["input_tokens"], m["output_tokens"], m["total_tokens"],
+			m["estimated_cost_usd"],
+			csvField(firstSeen), csvField(lastSeen))
+		w.Write([]byte(line))
+		count++
+		if count%5000 == 0 && flusher != nil {
+			flusher.Flush()
+		}
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+	log.Printf("[api] export user-summary complete: %d rows written", count)
+}
+
+func csvField(s string) string {
+	if strings.ContainsAny(s, ",\"\n") {
+		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+	}
+	return s
+}
+
+func (s *Server) handleUserSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	q := r.URL.Query()
+	page := queryInt(q, "page", 1)
+	pageSize := queryInt(q, "page_size", 100)
+	if pageSize > maxPageSize {
+		pageSize = maxPageSize
+	}
+	search := q.Get("search")
+	startDate := q.Get("start_date")
+	endDate := q.Get("end_date")
+	timeWindow := queryInt(q, "time_window_minutes", 0)
+
+	// Convert time_window_minutes to start_date if no explicit date range
+	if startDate == "" && endDate == "" && timeWindow > 0 {
+		startDate = time.Now().UTC().Add(8 * time.Hour).Add(-time.Duration(timeWindow) * time.Minute).Format("2006-01-02 15:04:05")
+	}
+
+	allItems, err := s.store.QueryUserSummary(search, startDate, endDate)
+	if err != nil {
+		log.Printf("[api] query user summary error: %v", err)
+		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()}, 500)
+		return
+	}
+
+	// Enrich all rows with token/cost + IP-user mapping
+	for _, item := range allItems {
+		enrichUsageMetrics(item, s.cfg)
+		srcUser := toString(item["src_user"])
+		if srcUser == "" {
+			srcIP := toString(item["src_ip"])
+			if entry := s.ipUsers.Lookup(srcIP); entry != nil && entry.Username != "" {
+				item["src_user"] = entry.Username
+				item["src_department"] = entry.Department
+			}
+		}
+	}
+
+	// Sort by estimated_cost_usd descending
+	sort.SliceStable(allItems, func(i, j int) bool {
+		return toFloat64(allItems[i]["estimated_cost_usd"]) > toFloat64(allItems[j]["estimated_cost_usd"])
+	})
+
+	// Manual pagination
+	total := len(allItems)
+	totalPages := (total + pageSize - 1) / pageSize
+	if totalPages == 0 {
+		totalPages = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	start := (page - 1) * pageSize
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	pageItems := allItems[start:end]
+
+	result := &model.PagedResult{
+		Items: pageItems, Total: total, Page: page, PageSize: pageSize, TotalPages: totalPages,
+	}
+
+	s.jsonResponse(w, map[string]interface{}{"ok": true, "data": result}, 200)
 }
 
 func (s *Server) jsonResponse(w http.ResponseWriter, payload interface{}, status int) {

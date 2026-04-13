@@ -132,7 +132,7 @@ func Load(envPath string) *Config {
 		TaskPollSeconds:    envFloat("LLM_MONITOR_TASK_POLL_SECONDS", 1),
 		ResultPollSeconds:  envFloat("LLM_MONITOR_RESULT_POLL_SECONDS", 1),
 
-		SummaryCacheTTL:    time.Duration(envFloat("LLM_MONITOR_SUMMARY_CACHE_TTL_SECONDS", 2) * float64(time.Second)),
+		SummaryCacheTTL:    time.Duration(envFloat("LLM_MONITOR_SUMMARY_CACHE_TTL_SECONDS", 30) * float64(time.Second)),
 		TargetsCacheTTL:    time.Duration(envFloat("LLM_MONITOR_TARGETS_CACHE_TTL_SECONDS", 15) * float64(time.Second)),
 		StatusCacheTTL:     time.Duration(envFloat("LLM_MONITOR_STATUS_CACHE_TTL_SECONDS", 2) * float64(time.Second)),
 		IPHintsCacheTTL:    time.Duration(envFloat("LLM_MONITOR_TARGET_IP_HINTS_CACHE_TTL_SECONDS", 3600) * float64(time.Second)),
@@ -152,7 +152,7 @@ func Load(envPath string) *Config {
 		ProxyUncachedInputTokensPerUplinkByte: envFloat("LLM_PROXY_UNCACHED_INPUT_TOKENS_PER_UPLINK_BYTE", 0.035063245394),
 		ProxyOutputTokensPerDownlinkByte:      envFloat("LLM_PROXY_OUTPUT_TOKENS_PER_DOWNLINK_BYTE", 0.004718444333),
 		ProxyInputTokenCostUSD:                envFloat("LLM_PROXY_INPUT_TOKEN_COST_USD", 0.000003138268266),
-		ProxyCacheReadBillingMultiplier:       envFloat("LLM_PROXY_CACHE_READ_BILLING_MULTIPLIER", 1.0),
+		ProxyCacheReadBillingMultiplier:       envFloat("LLM_PROXY_CACHE_READ_BILLING_MULTIPLIER", 0.45),
 		ProxyOutputTokenCostUSD:               envFloat("LLM_PROXY_OUTPUT_TOKEN_COST_USD", 0.000018829609595),
 
 		PricingXLSXPath: envStr("LLM_MONITOR_PRICING_XLSX", "official_model_pricing_usd.xlsx"),
