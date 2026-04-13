@@ -712,7 +712,11 @@ func (s *Server) handleUserSummary(w http.ResponseWriter, r *http.Request) {
 		enrichUsageMetrics(item, s.cfg)
 		srcUser := toString(item["src_user"])
 		if srcUser == "" {
+			// src_ip may be comma-separated (GROUP_CONCAT), try first IP
 			srcIP := toString(item["src_ip"])
+			if idx := strings.Index(srcIP, ","); idx > 0 {
+				srcIP = strings.TrimSpace(srcIP[:idx])
+			}
 			if entry := s.ipUsers.Lookup(srcIP); entry != nil && entry.Username != "" {
 				item["src_user"] = entry.Username
 				item["src_department"] = entry.Department

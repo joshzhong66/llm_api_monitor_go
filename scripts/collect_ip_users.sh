@@ -98,7 +98,7 @@ echo "}" >> "$OUTPUT_FILE"
 
 echo ""
 echo "=========================================="
-echo "  采集完成"
+echo "  AD 采集完成"
 echo "=========================================="
 echo "  AD 电脑总数:   $TOTAL"
 echo "  DNS 解析成功:  $RESOLVED"
@@ -106,6 +106,67 @@ echo "  DNS 解析失败:  $FAILED"
 echo "  JSON 输出:     $OUTPUT_FILE"
 echo "  CSV 输出:      $OUTPUT_CSV"
 echo "=========================================="
+
+# Step 3: Merge fixed IP-user mappings (manual overrides)
+FIXED_CSV="${OUTPUT_DIR}/fixed_user_ip.csv"
+if [ -f "$FIXED_CSV" ]; then
+    echo ""
+    echo "[$(date '+%H:%M:%S')] 合并固定 IP-用户映射: $FIXED_CSV"
+    FIXED_COUNT=0
+
+    # Use python to merge: read existing JSON, overlay fixed CSV entries, write back
+    python -c "
+import json, csv, sys
+
+json_path = sys.argv[1]
+csv_path  = sys.argv[2]
+
+# Load existing JSON
+with open(json_path, 'r') as f:
+    data = json.load(f)
+
+# Read fixed CSV (skip header, deduplicate by IP — last wins)
+added = 0
+with open(csv_path, 'r') as f:
+    reader = csv.reader(f)
+    header = next(reader, None)
+    for row in reader:
+        if len(row) < 3:
+            continue
+        username = row[0].strip()
+        department = row[1].strip() if len(row) > 1 else ''
+        ip = row[2].strip()
+        if not ip or not username:
+            continue
+        # Fixed mappings override AD mappings
+        data[ip] = {
+            'hostname': username,
+            'username': username,
+            'department': department
+        }
+        added += 1
+
+with open(json_path, 'w') as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+
+print('[fixed] merged %d fixed entries (total %d IPs)' % (added, len(data)))
+" "$OUTPUT_FILE" "$FIXED_CSV" 2>&1
+
+    # Also append to CSV
+    tail -n +2 "$FIXED_CSV" | while IFS=',' read -r username dept ip; do
+        username=$(echo "$username" | xargs)
+        dept=$(echo "$dept" | xargs)
+        ip=$(echo "$ip" | xargs)
+        [ -z "$ip" ] || [ -z "$username" ] && continue
+        echo "$ip,$username,$username,$dept" >> "$OUTPUT_CSV"
+    done
+
+    echo "[$(date '+%H:%M:%S')] 固定映射合并完成"
+else
+    echo ""
+    echo "[info] 未找到固定映射文件 $FIXED_CSV，跳过合并"
+fi
+
 echo ""
 echo "前 10 条映射:"
 head -12 "$OUTPUT_CSV"
