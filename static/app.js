@@ -23,6 +23,7 @@ const NAV_ITEMS = [
   {id: 'apiSummary', label: 'API 消费汇总'},
   {id: 'webSummary', label: '网页消费汇总'},
   {id: 'userSummary', label: '用户消费汇总'},
+  {id: 'userTotal', label: '用户总消费排行'},
   {id: 'apiSessions', label: 'API 会话日志'},
   {id: 'webSessions', label: '网页会话日志'},
   {id: 'apiRequests', label: 'API 请求明细'},
@@ -47,6 +48,8 @@ const TIME_RANGE_OPTIONS = [
   {value: 15, label: '近15分钟'},
   {value: 30, label: '近30分钟'},
   {value: 60, label: '近1小时'},
+  {value: 720, label: '近12小时'},
+  {value: 10080, label: '近7天'},
   {value: 0, label: '显示全部'},
 ];
 const TIME_RANGE_OPTIONS_NO_ALL = TIME_RANGE_OPTIONS.filter(item => item.value !== 0);
@@ -82,6 +85,7 @@ const state = {
   pipeline: null,
   summary: [],
   userSummaryPage: emptyPaged(USER_SUMMARY_PAGE_SIZE),
+  userTotalPage: emptyPaged(USER_SUMMARY_PAGE_SIZE),
   logsPage: emptyPaged(SESSION_PAGE_SIZE),
   requestLogsPage: emptyPaged(REQUEST_PAGE_SIZE),
   transportEventsPage: emptyPaged(QUIC_PAGE_SIZE),
@@ -96,6 +100,7 @@ const state = {
     interfaceTraffic: false,
     targets: false,
     userSummary: false,
+    userTotal: false,
   },
   search: {
     summary: '',
@@ -103,6 +108,7 @@ const state = {
     requests: '',
     quic: '',
     userSummary: '',
+    userTotal: '',
   },
   hideEmpty: {
     sessions: true,
@@ -115,12 +121,14 @@ const state = {
     webRequests: 1,
     quic: 1,
     userSummary: 1,
+    userTotal: 1,
   },
   timeRanges: {
     sessions: 5,
     requests: 5,
     quic: 5,
     userSummary: 5,
+    userTotal: 5,
   },
   requestSeq: {
     apiSessions: 0,
@@ -130,6 +138,7 @@ const state = {
     quic: 0,
     interfaceTraffic: 0,
     userSummary: 0,
+    userTotal: 0,
   },
 };
 
@@ -169,6 +178,7 @@ function viewGroup(view) {
   if (view === 'interfaceTraffic') return 'interfaceTraffic';
   if (view === 'targets') return 'targets';
   if (view === 'userSummary') return 'userSummary';
+  if (view === 'userTotal') return 'userTotal';
   return 'summary';
 }
 
@@ -576,8 +586,9 @@ function renderVendorFilters() {
       state.pagination.webRequests = 1;
       state.pagination.quic = 1;
       state.pagination.userSummary = 1;
+      state.pagination.userTotal = 1;
       renderAll();
-      if (isSessionView(state.selectedView) || isRequestView(state.selectedView) || state.selectedView === 'quic' || state.selectedView === 'userSummary') {
+      if (isSessionView(state.selectedView) || isRequestView(state.selectedView) || state.selectedView === 'quic' || state.selectedView === 'userSummary' || state.selectedView === 'userTotal') {
         refreshViewData(state.selectedView, true).then(renderAll).catch(() => renderAll());
       }
     });
@@ -712,6 +723,9 @@ function renderTimeRangeFilters(hostId, group, options) {
       }
       if (nextGroup === 'userSummary') {
         state.pagination.userSummary = 1;
+      }
+      if (nextGroup === 'userTotal') {
+        state.pagination.userTotal = 1;
       }
       renderAll();
       refreshViewData(state.selectedView, true).then(renderAll).catch(() => renderAll());
@@ -1120,6 +1134,58 @@ function renderUserSummary() {
   renderPagination('userSummaryPagination', payload, 'userSummary', page => changePage('userSummary', page));
 }
 
+function exportUserTotalCsv() {
+  const {startDate, endDate} = getExportDateRange();
+  const tw = (startDate || endDate) ? 0 : (state.timeRanges.userTotal || 0);
+  const qs = buildQuery({
+    type: 'user-total',
+    search: state.search.userTotal || '',
+    time_window_minutes: tw,
+    start_date: startDate,
+    end_date: endDate,
+  });
+  const label = (startDate || endDate) ? '自定义时间' : timeRangeLabel(state.timeRanges.userTotal);
+  showToast(`正在导出${label}用户总消费数据...`, 'info');
+  window.open(`/api/export-csv${qs}`, '_blank');
+}
+
+function renderUserTotal() {
+  const root = document.getElementById('userTotalSection');
+  root.classList.toggle('hidden', state.selectedView !== 'userTotal');
+  if (root.classList.contains('hidden')) return;
+  renderTimeRangeFilters('userTotalTimeFilters', 'userTotal');
+  const payload = state.userTotalPage;
+  const rows = payload.items || [];
+  const body = document.getElementById('userTotalBody');
+  document.getElementById('userTotalSearchMeta').textContent = `${detailMetaText(payload, state.search.userTotal, false)}，时间范围 ${timeRangeLabel(state.timeRanges.userTotal)}`;
+  if (!rows.length) {
+    body.innerHTML = '<tr><td class="empty-cell" colspan="14">当前筛选条件下暂无用户消费记录</td></tr>';
+    renderPagination('userTotalPagination', payload, 'userTotal', page => changePage('userTotal', page));
+    return;
+  }
+  body.innerHTML = rows.map(row => {
+    const userDisplay = row.src_user || 'N/A';
+    return `
+    <tr>
+      <td>${escapeHtml(userDisplay)}</td>
+      <td>${escapeHtml(row.src_department || '-')}</td>
+      <td class="mono">${escapeHtml(row.src_ip || '-')}</td>
+      <td>${numberFmt(row.vendor_count)}</td>
+      <td>${numberFmt(row.request_count)}</td>
+      <td>${bytesFmt(row.uplink_bytes)}</td>
+      <td>${bytesFmt(row.downlink_bytes)}</td>
+      <td>${bytesFmt(row.total_bytes)}</td>
+      <td>${numberFmt(row.input_tokens)}</td>
+      <td>${numberFmt(row.output_tokens)}</td>
+      <td>${numberFmt(row.total_tokens)}</td>
+      <td>${moneyFmt(row.estimated_cost_usd)}</td>
+      <td>${escapeHtml(row.first_seen || '-')}</td>
+      <td>${escapeHtml(row.last_seen || '-')}</td>
+    </tr>`;
+  }).join('');
+  renderPagination('userTotalPagination', payload, 'userTotal', page => changePage('userTotal', page));
+}
+
 function renderAll() {
   renderSidebar();
   renderHero();
@@ -1128,6 +1194,7 @@ function renderAll() {
   renderSystemMeta();
   renderSummary();
   renderUserSummary();
+  renderUserTotal();
   renderSessionLogs();
   renderRequestLogs();
   renderQuicDiagnostics();
@@ -1302,6 +1369,26 @@ function buildViewRequest(view, overrides) {
       },
     };
   }
+  if (view === 'userTotal') {
+    const page = Number(opts.page || state.pagination.userTotal || 1);
+    const pageSize = Number(opts.pageSize || USER_SUMMARY_PAGE_SIZE);
+    return {
+      label: '用户总消费排行',
+      url: `/api/user-total${buildQuery({
+        page,
+        page_size: pageSize,
+        search: state.search.userTotal,
+        time_window_minutes: state.timeRanges.userTotal,
+      })}`,
+      page,
+      pageSize,
+      assign(data) {
+        state.userTotalPage = normalizePagedPayload(data, state.pagination.userTotal, USER_SUMMARY_PAGE_SIZE);
+        state.pagination.userTotal = state.userTotalPage.page;
+        state.loadedViews.userTotal = true;
+      },
+    };
+  }
   return null;
 }
 
@@ -1313,11 +1400,12 @@ async function refreshViewData(view, force) {
   if (view === 'interfaceTraffic' && !force && state.loadedViews.interfaceTraffic) return;
   if (view === 'targets' && !force && state.loadedViews.targets) return;
   if (view === 'userSummary' && !force && state.loadedViews.userSummary) return;
+  if (view === 'userTotal' && !force && state.loadedViews.userTotal) return;
 
   const config = buildViewRequest(view);
   if (!config) return;
 
-  if (isSessionView(view) || isRequestView(view) || view === 'quic' || view === 'interfaceTraffic' || view === 'userSummary') {
+  if (isSessionView(view) || isRequestView(view) || view === 'quic' || view === 'interfaceTraffic' || view === 'userSummary' || view === 'userTotal') {
     state.requestSeq[view] = (state.requestSeq[view] || 0) + 1;
   }
   const seq = state.requestSeq[view] || 0;
@@ -1377,6 +1465,7 @@ function changePage(view, page) {
   if (isSessionView(view) || isRequestView(view)) state.pagination[view] = Math.max(1, page);
   if (view === 'quic') state.pagination.quic = Math.max(1, page);
   if (view === 'userSummary') state.pagination.userSummary = Math.max(1, page);
+  if (view === 'userTotal') state.pagination.userTotal = Math.max(1, page);
   refreshViewData(view, true).then(renderAll).catch(() => renderAll());
 }
 
@@ -1398,6 +1487,7 @@ function bindSearchInput(elementId, key) {
     }
     if (key === 'quic') state.pagination.quic = 1;
     if (key === 'userSummary') state.pagination.userSummary = 1;
+    if (key === 'userTotal') state.pagination.userTotal = 1;
     renderAll();
     if (searchTimers[key]) clearTimeout(searchTimers[key]);
     searchTimers[key] = setTimeout(() => {
@@ -1446,8 +1536,12 @@ bindSearchInput('sessionSearchInput', 'sessions');
 bindSearchInput('requestSearchInput', 'requests');
 bindSearchInput('quicSearchInput', 'quic');
 bindSearchInput('userSummarySearchInput', 'userSummary');
+bindSearchInput('userTotalSearchInput', 'userTotal');
 document.getElementById('exportUserSummaryBtn').addEventListener('click', () => {
   exportUserSummaryCsv();
+});
+document.getElementById('exportUserTotalBtn').addEventListener('click', () => {
+  exportUserTotalCsv();
 });
 
 // Hide empty sessions toggle

@@ -70,6 +70,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/interface-traffic", s.handleInterfaceTraffic)
 	s.mux.HandleFunc("/api/export-csv", s.handleExportCSV)
 	s.mux.HandleFunc("/api/user-summary", s.handleUserSummary)
+	s.mux.HandleFunc("/api/user-total", s.handleUserTotal)
 
 	// Static files
 	staticDir := s.cfg.StaticDir
@@ -434,14 +435,14 @@ func (s *Server) handleExportCSV(w http.ResponseWriter, r *http.Request) {
 	startDate := q.Get("start_date")
 	endDate := q.Get("end_date")
 
-	if exportType != "logs" && exportType != "request-logs" && exportType != "user-summary" {
-		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": "type must be 'logs', 'request-logs' or 'user-summary'"}, 400)
+	if exportType != "logs" && exportType != "request-logs" && exportType != "user-summary" && exportType != "user-total" {
+		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": "type must be 'logs', 'request-logs', 'user-summary' or 'user-total'"}, 400)
 		return
 	}
 
-	// Convert time_window_minutes to start_date for user-summary export
+	// Convert time_window_minutes to start_date for user exports
 	timeWindow := queryInt(q, "time_window_minutes", 0)
-	if exportType == "user-summary" && startDate == "" && endDate == "" && timeWindow > 0 {
+	if (exportType == "user-summary" || exportType == "user-total") && startDate == "" && endDate == "" && timeWindow > 0 {
 		startDate = time.Now().UTC().Add(8 * time.Hour).Add(-time.Duration(timeWindow) * time.Minute).Format("2006-01-02 15:04:05")
 	}
 
@@ -460,8 +461,10 @@ func (s *Server) handleExportCSV(w http.ResponseWriter, r *http.Request) {
 		s.streamExportLogs(w, flusher, vendor, search, channelClass, minBytes, startDate, endDate)
 	} else if exportType == "request-logs" {
 		s.streamExportRequestLogs(w, flusher, vendor, search, channelClass, minBytes, startDate, endDate)
-	} else {
+	} else if exportType == "user-summary" {
 		s.streamExportUserSummary(w, flusher, search, startDate, endDate)
+	} else {
+		s.streamExportUserTotal(w, flusher, search, startDate, endDate)
 	}
 }
 
@@ -672,6 +675,121 @@ func (s *Server) streamExportUserSummary(w http.ResponseWriter, flusher http.Flu
 	log.Printf("[api] export user-summary complete: %d rows written", count)
 }
 
+func (s *Server) streamExportUserTotal(w http.ResponseWriter, flusher http.Flusher, search, startDate, endDate string) {
+	// Reuse handleUserTotal logic: get detail data, enrich, aggregate
+	detailItems, err := s.store.QueryUserSummary(search, startDate, endDate)
+	if err != nil {
+		log.Printf("[api] export user-total error: %v", err)
+		return
+	}
+	for _, item := range detailItems {
+		enrichUsageMetrics(item, s.cfg)
+		srcUser := toString(item["src_user"])
+		if srcUser == "" {
+			srcIP := toString(item["src_ip"])
+			if idx := strings.Index(srcIP, ","); idx > 0 {
+				srcIP = strings.TrimSpace(srcIP[:idx])
+			}
+			if entry := s.ipUsers.Lookup(srcIP); entry != nil && entry.Username != "" {
+				item["src_user"] = entry.Username
+				item["src_department"] = entry.Department
+			}
+		}
+	}
+
+	type userAgg struct {
+		SrcUser, SrcDept                                              string
+		IPs                                                           map[string]bool
+		VendorCount                                                   map[string]bool
+		SessionCount, RequestCount                                    int
+		UplinkBytes, DownlinkBytes, TotalBytes                        int64
+		InputTokens, OutputTokens, TotalTokens                        int64
+		CostUSD                                                       float64
+		FirstSeen, LastSeen                                           string
+	}
+	aggMap := make(map[string]*userAgg)
+	aggOrder := []string{}
+
+	for _, item := range detailItems {
+		srcUser := toString(item["src_user"])
+		srcIP := toString(item["src_ip"])
+		key := srcUser
+		if key == "" {
+			firstIP := srcIP
+			if idx := strings.Index(firstIP, ","); idx > 0 {
+				firstIP = strings.TrimSpace(firstIP[:idx])
+			}
+			key = "ip:" + firstIP
+		}
+		agg, exists := aggMap[key]
+		if !exists {
+			agg = &userAgg{SrcUser: srcUser, SrcDept: toString(item["src_department"]), IPs: make(map[string]bool), VendorCount: make(map[string]bool)}
+			aggMap[key] = agg
+			aggOrder = append(aggOrder, key)
+		}
+		for _, ip := range strings.Split(srcIP, ",") {
+			if ip = strings.TrimSpace(ip); ip != "" {
+				agg.IPs[ip] = true
+			}
+		}
+		agg.VendorCount[toString(item["vendor"])] = true
+		if d := toString(item["src_department"]); d != "" {
+			agg.SrcDept = d
+		}
+		agg.SessionCount += int(toInt64(item["session_count"]))
+		agg.RequestCount += int(toInt64(item["request_count"]))
+		agg.UplinkBytes += toInt64(item["uplink_bytes"])
+		agg.DownlinkBytes += toInt64(item["downlink_bytes"])
+		agg.TotalBytes += toInt64(item["total_bytes"])
+		agg.InputTokens += toInt64(item["input_tokens"])
+		agg.OutputTokens += toInt64(item["output_tokens"])
+		agg.TotalTokens += toInt64(item["total_tokens"])
+		agg.CostUSD += toFloat64(item["estimated_cost_usd"])
+		fs := toString(item["first_seen"])
+		ls := toString(item["last_seen"])
+		if agg.FirstSeen == "" || (fs != "" && fs < agg.FirstSeen) {
+			agg.FirstSeen = fs
+		}
+		if ls > agg.LastSeen {
+			agg.LastSeen = ls
+		}
+	}
+
+	// Sort by cost desc
+	sort.SliceStable(aggOrder, func(i, j int) bool {
+		return aggMap[aggOrder[i]].CostUSD > aggMap[aggOrder[j]].CostUSD
+	})
+
+	w.Write([]byte("用户,部门,用户IP,使用厂商数,请求次数,上行流量,下行流量,总流量,输入Token,输出Token,总Token,预估金额USD,首次访问时间,最后访问时间\n"))
+	if flusher != nil {
+		flusher.Flush()
+	}
+	log.Printf("[api] streaming export user-total: %d users", len(aggOrder))
+	for _, key := range aggOrder {
+		agg := aggMap[key]
+		displayUser := agg.SrcUser
+		if displayUser == "" {
+			displayUser = "N/A"
+		}
+		ips := make([]string, 0, len(agg.IPs))
+		for ip := range agg.IPs {
+			ips = append(ips, ip)
+		}
+		sort.Strings(ips)
+		line := fmt.Sprintf("%s,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%v,%s,%s\n",
+			csvField(displayUser), csvField(agg.SrcDept), csvField(strings.Join(ips, " ")),
+			len(agg.VendorCount), agg.RequestCount,
+			agg.UplinkBytes, agg.DownlinkBytes, agg.TotalBytes,
+			agg.InputTokens, agg.OutputTokens, agg.TotalTokens,
+			agg.CostUSD, csvField(agg.FirstSeen), csvField(agg.LastSeen))
+		w.Write([]byte(line))
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+	log.Printf("[api] export user-total complete: %d users written", len(aggOrder))
+}
+
 func csvField(s string) string {
 	if strings.ContainsAny(s, ",\"\n") {
 		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
@@ -761,6 +879,181 @@ func (s *Server) handleUserSummary(w http.ResponseWriter, r *http.Request) {
 		Items: pageItems, Total: total, Page: page, PageSize: pageSize, TotalPages: totalPages,
 	}
 
+	s.jsonResponse(w, map[string]interface{}{"ok": true, "data": result}, 200)
+}
+
+func (s *Server) handleUserTotal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	q := r.URL.Query()
+	page := queryInt(q, "page", 1)
+	pageSize := queryInt(q, "page_size", 100)
+	if pageSize > maxPageSize {
+		pageSize = maxPageSize
+	}
+	search := q.Get("search")
+	startDate := q.Get("start_date")
+	endDate := q.Get("end_date")
+	timeWindow := queryInt(q, "time_window_minutes", 0)
+
+	if startDate == "" && endDate == "" && timeWindow > 0 {
+		startDate = time.Now().UTC().Add(8 * time.Hour).Add(-time.Duration(timeWindow) * time.Minute).Format("2006-01-02 15:04:05")
+	}
+
+	// Reuse QueryUserSummary (per vendor+domain) to get accurate per-vendor pricing
+	detailItems, err := s.store.QueryUserSummary(search, startDate, endDate)
+	if err != nil {
+		log.Printf("[api] query user total error: %v", err)
+		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()}, 500)
+		return
+	}
+
+	// Enrich each detail row with token/cost + IP-user mapping
+	for _, item := range detailItems {
+		enrichUsageMetrics(item, s.cfg)
+		srcUser := toString(item["src_user"])
+		if srcUser == "" {
+			srcIP := toString(item["src_ip"])
+			if idx := strings.Index(srcIP, ","); idx > 0 {
+				srcIP = strings.TrimSpace(srcIP[:idx])
+			}
+			if entry := s.ipUsers.Lookup(srcIP); entry != nil && entry.Username != "" {
+				item["src_user"] = entry.Username
+				item["src_department"] = entry.Department
+			}
+		}
+	}
+
+	// Aggregate by user: group key = src_user (or src_ip if empty)
+	type userAgg struct {
+		SrcUser, SrcDept string
+		IPs              map[string]bool
+		VendorSet        map[string]bool
+		SessionCount     int
+		RequestCount     int
+		UplinkBytes      int64
+		DownlinkBytes    int64
+		TotalBytes       int64
+		InputTokens      int64
+		OutputTokens     int64
+		TotalTokens      int64
+		CostUSD          float64
+		FirstSeen        string
+		LastSeen         string
+	}
+	aggMap := make(map[string]*userAgg)
+	aggOrder := []string{}
+
+	for _, item := range detailItems {
+		srcUser := toString(item["src_user"])
+		srcIP := toString(item["src_ip"])
+		key := srcUser
+		if key == "" {
+			// Use first IP as key for anonymous users
+			firstIP := srcIP
+			if idx := strings.Index(firstIP, ","); idx > 0 {
+				firstIP = strings.TrimSpace(firstIP[:idx])
+			}
+			key = "ip:" + firstIP
+		}
+
+		agg, exists := aggMap[key]
+		if !exists {
+			agg = &userAgg{
+				SrcUser: srcUser,
+				SrcDept: toString(item["src_department"]),
+				IPs:     make(map[string]bool),
+				VendorSet: make(map[string]bool),
+			}
+			aggMap[key] = agg
+			aggOrder = append(aggOrder, key)
+		}
+
+		// Collect IPs
+		for _, ip := range strings.Split(srcIP, ",") {
+			ip = strings.TrimSpace(ip)
+			if ip != "" {
+				agg.IPs[ip] = true
+			}
+		}
+		agg.VendorSet[toString(item["vendor"])] = true
+		if dept := toString(item["src_department"]); dept != "" {
+			agg.SrcDept = dept
+		}
+		agg.SessionCount += int(toInt64(item["session_count"]))
+		agg.RequestCount += int(toInt64(item["request_count"]))
+		agg.UplinkBytes += toInt64(item["uplink_bytes"])
+		agg.DownlinkBytes += toInt64(item["downlink_bytes"])
+		agg.TotalBytes += toInt64(item["total_bytes"])
+		agg.InputTokens += toInt64(item["input_tokens"])
+		agg.OutputTokens += toInt64(item["output_tokens"])
+		agg.TotalTokens += toInt64(item["total_tokens"])
+		agg.CostUSD += toFloat64(item["estimated_cost_usd"])
+
+		fs := toString(item["first_seen"])
+		ls := toString(item["last_seen"])
+		if agg.FirstSeen == "" || (fs != "" && fs < agg.FirstSeen) {
+			agg.FirstSeen = fs
+		}
+		if ls > agg.LastSeen {
+			agg.LastSeen = ls
+		}
+	}
+
+	// Build result list
+	allItems := make([]map[string]interface{}, 0, len(aggOrder))
+	for _, key := range aggOrder {
+		agg := aggMap[key]
+		ips := make([]string, 0, len(agg.IPs))
+		for ip := range agg.IPs {
+			ips = append(ips, ip)
+		}
+		sort.Strings(ips)
+		allItems = append(allItems, map[string]interface{}{
+			"src_user":          agg.SrcUser,
+			"src_department":    agg.SrcDept,
+			"src_ip":            strings.Join(ips, ", "),
+			"vendor_count":      len(agg.VendorSet),
+			"session_count":     agg.SessionCount,
+			"request_count":     agg.RequestCount,
+			"uplink_bytes":      agg.UplinkBytes,
+			"downlink_bytes":    agg.DownlinkBytes,
+			"total_bytes":       agg.TotalBytes,
+			"input_tokens":      agg.InputTokens,
+			"output_tokens":     agg.OutputTokens,
+			"total_tokens":      agg.TotalTokens,
+			"estimated_cost_usd": agg.CostUSD,
+			"estimated_cost_cny": agg.CostUSD * s.cfg.USDCNYRate,
+			"first_seen":        agg.FirstSeen,
+			"last_seen":         agg.LastSeen,
+		})
+	}
+
+	// Sort by cost descending
+	sort.SliceStable(allItems, func(i, j int) bool {
+		return toFloat64(allItems[i]["estimated_cost_usd"]) > toFloat64(allItems[j]["estimated_cost_usd"])
+	})
+
+	// Manual pagination
+	total := len(allItems)
+	totalPages := (total + pageSize - 1) / pageSize
+	if totalPages == 0 {
+		totalPages = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	start := (page - 1) * pageSize
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+
+	result := &model.PagedResult{
+		Items: allItems[start:end], Total: total, Page: page, PageSize: pageSize, TotalPages: totalPages,
+	}
 	s.jsonResponse(w, map[string]interface{}{"ok": true, "data": result}, 200)
 }
 

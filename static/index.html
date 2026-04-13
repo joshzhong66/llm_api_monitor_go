@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>厂商 API 消费日志平台</title>
-  <link rel="stylesheet" href="/styles.css?v=20260413_1430">
+  <link rel="stylesheet" href="/styles.css?v=20260413_1530">
 </head>
 <body>
   <div class="app-layout">
@@ -147,6 +147,44 @@
           </table>
         </div>
         <div id="userSummaryPagination" class="pagination-row"></div>
+      </section>
+      <section id="userTotalSection" class="panel hidden">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">User Total</p>
+            <h3>用户总消费排行</h3>
+          </div>
+          <div class="panel-actions">
+            <input id="userTotalSearchInput" class="search-input" type="search" placeholder="搜索用户、部门、IP">
+            <button id="exportUserTotalBtn" class="ghost action-button" type="button">导出用户总消费 CSV</button>
+          </div>
+        </div>
+        <div id="userTotalTimeFilters" class="filter-row subfilter-row"></div>
+        <p id="userTotalSearchMeta" class="search-meta"></p>
+        <div class="table-wrap">
+          <table class="compact-table">
+            <thead>
+              <tr>
+                <th>用户</th>
+                <th>部门</th>
+                <th>用户 IP</th>
+                <th>使用厂商数</th>
+                <th>请求次数</th>
+                <th>上行流量</th>
+                <th>下行流量</th>
+                <th>总流量</th>
+                <th>输入 Token</th>
+                <th>输出 Token</th>
+                <th>总 Token</th>
+                <th>预估金额 USD</th>
+                <th>首次访问时间</th>
+                <th>最后访问时间</th>
+              </tr>
+            </thead>
+            <tbody id="userTotalBody"></tbody>
+          </table>
+        </div>
+        <div id="userTotalPagination" class="pagination-row"></div>
       </section>
       <section id="sessionSection" class="panel hidden">
         <div class="panel-head">
@@ -302,6 +340,6 @@
       </section>
     </main>
   </div>
-  <script src="/app.js?v=20260413_1430"></script>
+  <script src="/app.js?v=20260413_1530"></script>
 </body>
 </html>
