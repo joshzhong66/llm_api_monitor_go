@@ -575,8 +575,9 @@ function renderVendorFilters() {
       state.pagination.apiRequests = 1;
       state.pagination.webRequests = 1;
       state.pagination.quic = 1;
+      state.pagination.userSummary = 1;
       renderAll();
-      if (isSessionView(state.selectedView) || isRequestView(state.selectedView) || state.selectedView === 'quic') {
+      if (isSessionView(state.selectedView) || isRequestView(state.selectedView) || state.selectedView === 'quic' || state.selectedView === 'userSummary') {
         refreshViewData(state.selectedView, true).then(renderAll).catch(() => renderAll());
       }
     });
@@ -1288,6 +1289,7 @@ function buildViewRequest(view, overrides) {
       url: `/api/user-summary${buildQuery({
         page,
         page_size: pageSize,
+        vendor: state.selectedVendor === '全部' ? '' : state.selectedVendor,
         search: state.search.userSummary,
         time_window_minutes: state.timeRanges.userSummary,
       })}`,

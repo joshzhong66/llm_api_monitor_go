@@ -693,6 +693,7 @@ func (s *Server) handleUserSummary(w http.ResponseWriter, r *http.Request) {
 	search := q.Get("search")
 	startDate := q.Get("start_date")
 	endDate := q.Get("end_date")
+	vendor := q.Get("vendor")
 	timeWindow := queryInt(q, "time_window_minutes", 0)
 
 	// Convert time_window_minutes to start_date if no explicit date range
@@ -722,6 +723,17 @@ func (s *Server) handleUserSummary(w http.ResponseWriter, r *http.Request) {
 				item["src_department"] = entry.Department
 			}
 		}
+	}
+
+	// Filter by vendor if specified
+	if vendor != "" {
+		filtered := make([]map[string]interface{}, 0, len(allItems))
+		for _, item := range allItems {
+			if toString(item["vendor"]) == vendor {
+				filtered = append(filtered, item)
+			}
+		}
+		allItems = filtered
 	}
 
 	// Sort by estimated_cost_usd descending
