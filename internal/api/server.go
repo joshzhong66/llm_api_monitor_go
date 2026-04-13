@@ -32,6 +32,11 @@ type Server struct {
 		data    []map[string]interface{}
 		updated time.Time
 	}
+	userSummaryCache struct {
+		mu      sync.Mutex
+		data    []map[string]interface{}
+		updated time.Time
+	}
 }
 
 const maxPageSize = 10000
@@ -819,27 +824,51 @@ func (s *Server) handleUserSummary(w http.ResponseWriter, r *http.Request) {
 		startDate = time.Now().UTC().Add(8 * time.Hour).Add(-time.Duration(timeWindow) * time.Minute).Format("2006-01-02 15:04:05")
 	}
 
-	allItems, err := s.store.QueryUserSummary(search, startDate, endDate)
-	if err != nil {
-		log.Printf("[api] query user summary error: %v", err)
-		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()}, 500)
-		return
+	isDefaultQuery := search == "" && startDate == "" && endDate == "" && vendor == ""
+
+	// Use cache for default (show-all) queries to avoid 4+ minute full table scan
+	var allItems []map[string]interface{}
+	cached := false
+	if isDefaultQuery {
+		s.userSummaryCache.mu.Lock()
+		if s.userSummaryCache.data != nil && time.Since(s.userSummaryCache.updated) < s.cfg.SummaryCacheTTL {
+			allItems = s.userSummaryCache.data
+			cached = true
+		}
+		s.userSummaryCache.mu.Unlock()
 	}
 
-	// Enrich all rows with token/cost + IP-user mapping
-	for _, item := range allItems {
-		enrichUsageMetrics(item, s.cfg)
-		srcUser := toString(item["src_user"])
-		if srcUser == "" {
-			// src_ip may be comma-separated (GROUP_CONCAT), try first IP
-			srcIP := toString(item["src_ip"])
-			if idx := strings.Index(srcIP, ","); idx > 0 {
-				srcIP = strings.TrimSpace(srcIP[:idx])
+	if !cached {
+		var err error
+		allItems, err = s.store.QueryUserSummary(search, startDate, endDate)
+		if err != nil {
+			log.Printf("[api] query user summary error: %v", err)
+			s.jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()}, 500)
+			return
+		}
+
+		// Enrich all rows with token/cost + IP-user mapping
+		for _, item := range allItems {
+			enrichUsageMetrics(item, s.cfg)
+			srcUser := toString(item["src_user"])
+			if srcUser == "" {
+				srcIP := toString(item["src_ip"])
+				if idx := strings.Index(srcIP, ","); idx > 0 {
+					srcIP = strings.TrimSpace(srcIP[:idx])
+				}
+				if entry := s.ipUsers.Lookup(srcIP); entry != nil && entry.Username != "" {
+					item["src_user"] = entry.Username
+					item["src_department"] = entry.Department
+				}
 			}
-			if entry := s.ipUsers.Lookup(srcIP); entry != nil && entry.Username != "" {
-				item["src_user"] = entry.Username
-				item["src_department"] = entry.Department
-			}
+		}
+
+		// Cache default query results
+		if isDefaultQuery {
+			s.userSummaryCache.mu.Lock()
+			s.userSummaryCache.data = allItems
+			s.userSummaryCache.updated = time.Now()
+			s.userSummaryCache.mu.Unlock()
 		}
 	}
 
