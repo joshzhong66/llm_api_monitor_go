@@ -681,3 +681,36 @@ tbody tr:hover {
   margin-right: 4px;
   white-space: nowrap;
 }
+
+/* User total expand */
+.expand-icon {
+  display: inline-block;
+  width: 14px;
+  font-size: 10px;
+  color: var(--accent);
+}
+.row-expanded {
+  background: var(--accent-soft) !important;
+}
+.expand-detail td {
+  background: #f8f9fa;
+}
+.expand-loading {
+  text-align: center;
+  color: var(--muted);
+  padding: 12px !important;
+  font-size: 13px;
+}
+.sub-table {
+  margin: 0;
+  border: none;
+  font-size: 12px;
+}
+.sub-table th {
+  background: #eef1f5;
+  font-size: 11px;
+  padding: 4px 8px;
+}
+.sub-table td {
+  padding: 3px 8px;
+}

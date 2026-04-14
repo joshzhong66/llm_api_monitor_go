@@ -90,6 +90,8 @@ const state = {
   summary: [],
   userSummaryPage: emptyPaged(USER_SUMMARY_PAGE_SIZE),
   userTotalPage: emptyPaged(USER_SUMMARY_PAGE_SIZE),
+  userTotalExpanded: '',
+  userTotalExpandedData: null,
   logsPage: emptyPaged(SESSION_PAGE_SIZE),
   requestLogsPage: emptyPaged(REQUEST_PAGE_SIZE),
   transportEventsPage: emptyPaged(QUIC_PAGE_SIZE),
@@ -1138,6 +1140,22 @@ function renderUserSummary() {
 }
 
 function exportUserTotalCsv() {
+  const expandedUser = state.userTotalExpanded || '';
+  if (expandedUser) {
+    // Export expanded user's vendor detail
+    const {startDate, endDate} = getExportDateRange();
+    const tw = (startDate || endDate) ? 0 : (state.timeRanges.userTotal || 0);
+    const qs = buildQuery({
+      type: 'user-summary',
+      search: expandedUser,
+      time_window_minutes: tw,
+      start_date: startDate,
+      end_date: endDate,
+    });
+    showToast(`正在导出 ${expandedUser} 的厂商消费明细...`, 'info');
+    window.open(`/api/export-csv${qs}`, '_blank');
+    return;
+  }
   const {startDate, endDate} = getExportDateRange();
   const tw = (startDate || endDate) ? 0 : (state.timeRanges.userTotal || 0);
   const qs = buildQuery({
@@ -1152,6 +1170,29 @@ function exportUserTotalCsv() {
   window.open(`/api/export-csv${qs}`, '_blank');
 }
 
+function toggleUserTotalExpand(userKey, userDisplay) {
+  if (state.userTotalExpanded === userKey) {
+    state.userTotalExpanded = '';
+    state.userTotalExpandedData = null;
+    renderUserTotal();
+    return;
+  }
+  state.userTotalExpanded = userKey;
+  state.userTotalExpandedData = null;
+  renderUserTotal();
+  // Fetch detail data
+  const tw = state.timeRanges.userTotal || 0;
+  const searchKey = userDisplay === 'N/A' ? userKey : userDisplay;
+  request(`/api/user-summary${buildQuery({search: searchKey, time_window_minutes: tw, page_size: 1000})}`)
+    .then(result => {
+      if (state.userTotalExpanded === userKey) {
+        state.userTotalExpandedData = (result.data && result.data.items) || [];
+        renderUserTotal();
+      }
+    })
+    .catch(() => {});
+}
+
 function renderUserTotal() {
   const root = document.getElementById('userTotalSection');
   root.classList.toggle('hidden', state.selectedView !== 'userTotal');
@@ -1160,17 +1201,22 @@ function renderUserTotal() {
   const payload = state.userTotalPage;
   const rows = payload.items || [];
   const body = document.getElementById('userTotalBody');
+  const expandedUser = state.userTotalExpanded || '';
   document.getElementById('userTotalSearchMeta').textContent = `${detailMetaText(payload, state.search.userTotal, false)}，时间范围 ${timeRangeLabel(state.timeRanges.userTotal)}`;
   if (!rows.length) {
     body.innerHTML = '<tr><td class="empty-cell" colspan="14">当前筛选条件下暂无用户消费记录</td></tr>';
     renderPagination('userTotalPagination', payload, 'userTotal', page => changePage('userTotal', page));
     return;
   }
-  body.innerHTML = rows.map(row => {
+  let html = '';
+  rows.forEach(row => {
     const userDisplay = row.src_user || 'N/A';
-    return `
-    <tr>
-      <td>${escapeHtml(userDisplay)}</td>
+    const userKey = row.src_user || row.src_ip || '';
+    const isExpanded = expandedUser === userKey;
+    const expandIcon = isExpanded ? '▼' : '▶';
+    html += `
+    <tr class="${isExpanded ? 'row-expanded' : ''}" data-expand-user="${escapeHtml(userKey)}" data-expand-display="${escapeHtml(userDisplay)}" style="cursor:pointer">
+      <td><span class="expand-icon">${expandIcon}</span> ${escapeHtml(userDisplay)}</td>
       <td>${escapeHtml(row.src_department || '-')}</td>
       <td class="mono">${escapeHtml(row.src_ip || '-')}</td>
       <td>${numberFmt(row.vendor_count)}</td>
@@ -1185,7 +1231,49 @@ function renderUserTotal() {
       <td>${escapeHtml(row.first_seen || '-')}</td>
       <td>${escapeHtml(row.last_seen || '-')}</td>
     </tr>`;
-  }).join('');
+    if (isExpanded) {
+      const details = state.userTotalExpandedData;
+      if (details === null) {
+        html += `<tr class="expand-detail"><td colspan="14" class="expand-loading">加载厂商明细中...</td></tr>`;
+      } else if (details.length === 0) {
+        html += `<tr class="expand-detail"><td colspan="14" class="expand-loading">暂无厂商明细数据</td></tr>`;
+      } else {
+        html += `<tr class="expand-detail"><td colspan="14" style="padding:0">
+          <table class="compact-table sub-table">
+            <thead><tr>
+              <th>模型厂商</th><th>调用类型</th><th>访问域名</th><th>请求次数</th>
+              <th>上行流量</th><th>下行流量</th><th>总流量</th>
+              <th>输入 Token</th><th>输出 Token</th><th>总 Token</th>
+              <th>预估金额 USD</th><th>首次时间</th><th>最后时间</th>
+            </tr></thead><tbody>`;
+        details.forEach(d => {
+          html += `<tr>
+            <td><span class="vendor-tag">${escapeHtml(d.vendor)}</span></td>
+            <td>${escapeHtml(channelLabel(d.channel_type))}</td>
+            <td class="mono">${escapeHtml(d.domain)}</td>
+            <td>${numberFmt(d.request_count)}</td>
+            <td>${bytesFmt(d.uplink_bytes)}</td>
+            <td>${bytesFmt(d.downlink_bytes)}</td>
+            <td>${bytesFmt(d.total_bytes)}</td>
+            <td>${numberFmt(d.input_tokens)}</td>
+            <td>${numberFmt(d.output_tokens)}</td>
+            <td>${numberFmt(d.total_tokens)}</td>
+            <td>${moneyFmt(d.estimated_cost_usd)}</td>
+            <td>${escapeHtml(d.first_seen || '-')}</td>
+            <td>${escapeHtml(d.last_seen || '-')}</td>
+          </tr>`;
+        });
+        html += `</tbody></table></td></tr>`;
+      }
+    }
+  });
+  body.innerHTML = html;
+  // Bind expand click events
+  Array.prototype.forEach.call(body.querySelectorAll('[data-expand-user]'), node => {
+    node.addEventListener('click', () => {
+      toggleUserTotalExpand(node.getAttribute('data-expand-user'), node.getAttribute('data-expand-display'));
+    });
+  });
   renderPagination('userTotalPagination', payload, 'userTotal', page => changePage('userTotal', page));
 }
 
