@@ -407,7 +407,7 @@ func (s *Store) InsertRequestLogs(jobID int64, rows []*model.RequestLog) error {
 
 func (s *Store) insertRequestLogBatch(jobID int64, rows []*model.RequestLog) error {
 	var sb strings.Builder
-	sb.WriteString(`INSERT INTO request_logs
+	sb.WriteString(`INSERT IGNORE INTO request_logs
 		(capture_job_id, request_key, session_key, iface, src_ip, src_port,
 		 dst_ip, dst_port, seen_at, vendor, domain,
 		 uplink_bytes, downlink_bytes, total_bytes, request_count,
@@ -424,12 +424,6 @@ func (s *Store) insertRequestLogBatch(jobID int64, rows []*model.RequestLog) err
 			r.UplinkBytes, r.DownlinkBytes, r.TotalBytes, r.RequestCount,
 			r.SrcUser, r.SrcHostname, r.SrcDepartment)
 	}
-	sb.WriteString(` ON DUPLICATE KEY UPDATE
-		uplink_bytes=VALUES(uplink_bytes), downlink_bytes=VALUES(downlink_bytes),
-		total_bytes=VALUES(total_bytes),
-		src_user=COALESCE(NULLIF(VALUES(src_user),''),src_user),
-		src_hostname=COALESCE(NULLIF(VALUES(src_hostname),''),src_hostname),
-		src_department=COALESCE(NULLIF(VALUES(src_department),''),src_department)`)
 	_, err := s.DB.Exec(sb.String(), args...)
 	return err
 }
