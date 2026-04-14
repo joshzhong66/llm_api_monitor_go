@@ -320,7 +320,7 @@ func (s *Store) UpsertSessions(jobID int64, rows []*model.Session) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	const batchSize = 50
+	const batchSize = 200
 	for i := 0; i < len(rows); i += batchSize {
 		end := i + batchSize
 		if end > len(rows) {
@@ -369,7 +369,7 @@ func (s *Store) InsertRequestLogs(jobID int64, rows []*model.RequestLog) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	const batchSize = 100
+	const batchSize = 500
 	for i := 0; i < len(rows); i += batchSize {
 		end := i + batchSize
 		if end > len(rows) {
@@ -416,7 +416,7 @@ func (s *Store) InsertTransportEvents(jobID int64, rows []*model.TransportEvent)
 	if len(rows) == 0 {
 		return nil
 	}
-	const batchSize = 200
+	const batchSize = 500
 	for i := 0; i < len(rows); i += batchSize {
 		end := i + batchSize
 		if end > len(rows) {

@@ -56,7 +56,48 @@ func NewServer(cfg *config.Config, store *db.Store, engine *parser.Engine) *Serv
 		mux:     http.NewServeMux(),
 	}
 	s.registerRoutes()
+	// Warm caches in background to avoid first-request timeout
+	go s.warmCaches()
 	return s
+}
+
+func (s *Server) warmCaches() {
+	log.Printf("[api] warming summary caches in background...")
+	// Warm /api/summary cache
+	data, err := s.store.QuerySummary("", "")
+	if err == nil {
+		for _, item := range data {
+			enrichUsageMetrics(item, s.cfg)
+		}
+		s.summaryCache.mu.Lock()
+		s.summaryCache.data = data
+		s.summaryCache.updated = time.Now()
+		s.summaryCache.mu.Unlock()
+		log.Printf("[api] summary cache warmed: %d rows", len(data))
+	}
+	// Warm /api/user-summary cache
+	allItems, err := s.store.QueryUserSummary("", "", "")
+	if err == nil {
+		for _, item := range allItems {
+			enrichUsageMetrics(item, s.cfg)
+			srcUser := toString(item["src_user"])
+			if srcUser == "" {
+				srcIP := toString(item["src_ip"])
+				if idx := strings.Index(srcIP, ","); idx > 0 {
+					srcIP = strings.TrimSpace(srcIP[:idx])
+				}
+				if entry := s.ipUsers.Lookup(srcIP); entry != nil && entry.Username != "" {
+					item["src_user"] = entry.Username
+					item["src_department"] = entry.Department
+				}
+			}
+		}
+		s.userSummaryCache.mu.Lock()
+		s.userSummaryCache.data = allItems
+		s.userSummaryCache.updated = time.Now()
+		s.userSummaryCache.mu.Unlock()
+		log.Printf("[api] user summary cache warmed: %d rows", len(allItems))
+	}
 }
 
 // LookupIP returns the IPUserEntry for an IP.
@@ -1114,26 +1155,42 @@ func (s *Server) handleUserTotal(w http.ResponseWriter, r *http.Request) {
 		startDate = time.Now().UTC().Add(8 * time.Hour).Add(-time.Duration(timeWindow) * time.Minute).Format("2006-01-02 15:04:05")
 	}
 
-	// Reuse QueryUserSummary (per vendor+domain) to get accurate per-vendor pricing
-	detailItems, err := s.store.QueryUserSummary(search, startDate, endDate)
-	if err != nil {
-		log.Printf("[api] query user total error: %v", err)
-		s.jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()}, 500)
-		return
+	isDefaultQuery := search == "" && startDate == "" && endDate == ""
+
+	// Reuse userSummaryCache for default queries (same data, just aggregated differently)
+	var detailItems []map[string]interface{}
+	cached := false
+	if isDefaultQuery {
+		s.userSummaryCache.mu.Lock()
+		if s.userSummaryCache.data != nil && time.Since(s.userSummaryCache.updated) < s.cfg.SummaryCacheTTL {
+			detailItems = s.userSummaryCache.data
+			cached = true
+		}
+		s.userSummaryCache.mu.Unlock()
 	}
 
-	// Enrich each detail row with token/cost + IP-user mapping
-	for _, item := range detailItems {
-		enrichUsageMetrics(item, s.cfg)
-		srcUser := toString(item["src_user"])
-		if srcUser == "" {
-			srcIP := toString(item["src_ip"])
-			if idx := strings.Index(srcIP, ","); idx > 0 {
-				srcIP = strings.TrimSpace(srcIP[:idx])
-			}
-			if entry := s.ipUsers.Lookup(srcIP); entry != nil && entry.Username != "" {
-				item["src_user"] = entry.Username
-				item["src_department"] = entry.Department
+	if !cached {
+		var err error
+		detailItems, err = s.store.QueryUserSummary(search, startDate, endDate)
+		if err != nil {
+			log.Printf("[api] query user total error: %v", err)
+			s.jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()}, 500)
+			return
+		}
+
+		// Enrich each detail row with token/cost + IP-user mapping
+		for _, item := range detailItems {
+			enrichUsageMetrics(item, s.cfg)
+			srcUser := toString(item["src_user"])
+			if srcUser == "" {
+				srcIP := toString(item["src_ip"])
+				if idx := strings.Index(srcIP, ","); idx > 0 {
+					srcIP = strings.TrimSpace(srcIP[:idx])
+				}
+				if entry := s.ipUsers.Lookup(srcIP); entry != nil && entry.Username != "" {
+					item["src_user"] = entry.Username
+					item["src_department"] = entry.Department
+				}
 			}
 		}
 	}

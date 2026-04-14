@@ -132,7 +132,7 @@ func Load(envPath string) *Config {
 		TaskPollSeconds:    envFloat("LLM_MONITOR_TASK_POLL_SECONDS", 1),
 		ResultPollSeconds:  envFloat("LLM_MONITOR_RESULT_POLL_SECONDS", 1),
 
-		SummaryCacheTTL:    time.Duration(envFloat("LLM_MONITOR_SUMMARY_CACHE_TTL_SECONDS", 30) * float64(time.Second)),
+		SummaryCacheTTL:    time.Duration(envFloat("LLM_MONITOR_SUMMARY_CACHE_TTL_SECONDS", 300) * float64(time.Second)),
 		TargetsCacheTTL:    time.Duration(envFloat("LLM_MONITOR_TARGETS_CACHE_TTL_SECONDS", 15) * float64(time.Second)),
 		StatusCacheTTL:     time.Duration(envFloat("LLM_MONITOR_STATUS_CACHE_TTL_SECONDS", 2) * float64(time.Second)),
 		IPHintsCacheTTL:    time.Duration(envFloat("LLM_MONITOR_TARGET_IP_HINTS_CACHE_TTL_SECONDS", 3600) * float64(time.Second)),
