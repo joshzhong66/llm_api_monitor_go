@@ -364,18 +364,41 @@ func (s *Store) upsertSessionBatch(jobID int64, rows []*model.Session) error {
 	return err
 }
 
-// InsertRequestLogs batch inserts request logs using multi-row INSERT.
+// InsertRequestLogs batch inserts request logs using multi-row INSERT with parallel workers.
 func (s *Store) InsertRequestLogs(jobID int64, rows []*model.RequestLog) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	const batchSize = 500
+	const batchSize = 1000
+	const workers = 4
+
+	// Split into batches
+	var batches [][]*model.RequestLog
 	for i := 0; i < len(rows); i += batchSize {
 		end := i + batchSize
 		if end > len(rows) {
 			end = len(rows)
 		}
-		if err := s.insertRequestLogBatch(jobID, rows[i:end]); err != nil {
+		batches = append(batches, rows[i:end])
+	}
+
+	// Execute batches in parallel
+	errCh := make(chan error, len(batches))
+	sem := make(chan struct{}, workers)
+	for _, batch := range batches {
+		sem <- struct{}{}
+		go func(b []*model.RequestLog) {
+			defer func() { <-sem }()
+			errCh <- s.insertRequestLogBatch(jobID, b)
+		}(batch)
+	}
+	// Wait for all
+	for i := 0; i < cap(sem); i++ {
+		sem <- struct{}{}
+	}
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
 			return err
 		}
 	}
@@ -411,18 +434,38 @@ func (s *Store) insertRequestLogBatch(jobID int64, rows []*model.RequestLog) err
 	return err
 }
 
-// InsertTransportEvents batch inserts transport events using multi-row INSERT.
+// InsertTransportEvents batch inserts transport events using multi-row INSERT with parallel workers.
 func (s *Store) InsertTransportEvents(jobID int64, rows []*model.TransportEvent) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	const batchSize = 500
+	const batchSize = 1000
+	const workers = 4
+
+	var batches [][]*model.TransportEvent
 	for i := 0; i < len(rows); i += batchSize {
 		end := i + batchSize
 		if end > len(rows) {
 			end = len(rows)
 		}
-		if err := s.insertTransportBatch(jobID, rows[i:end]); err != nil {
+		batches = append(batches, rows[i:end])
+	}
+
+	errCh := make(chan error, len(batches))
+	sem := make(chan struct{}, workers)
+	for _, batch := range batches {
+		sem <- struct{}{}
+		go func(b []*model.TransportEvent) {
+			defer func() { <-sem }()
+			errCh <- s.insertTransportBatch(jobID, b)
+		}(batch)
+	}
+	for i := 0; i < cap(sem); i++ {
+		sem <- struct{}{}
+	}
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
 			return err
 		}
 	}
