@@ -987,15 +987,15 @@ func (s *Server) streamExportUserTotal(w http.ResponseWriter, flusher http.Flush
 		sort.Strings(ips)
 		ipStr := strings.Join(ips, " ")
 		for _, d := range g.Details {
-			line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%d,%d,%d,%d,%v,%v,%v,%v,%s,%s\n",
+			line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%d,%d,%d,%d,%d,%d,%d,%.4f,%s,%s\n",
 				csvField(g.DisplayUser), csvField(g.Dept), csvField(ipStr),
 				csvField(toString(d["vendor"])),
 				csvField(toString(d["channel_type"])),
 				csvField(toString(d["domain"])),
 				toInt64(d["request_count"]),
 				toInt64(d["uplink_bytes"]), toInt64(d["downlink_bytes"]), toInt64(d["total_bytes"]),
-				d["input_tokens"], d["output_tokens"], d["total_tokens"],
-				d["estimated_cost_usd"],
+				toInt64(d["input_tokens"]), toInt64(d["output_tokens"]), toInt64(d["total_tokens"]),
+				toFloat64(d["estimated_cost_usd"]),
 				csvField(toString(d["first_seen"])), csvField(toString(d["last_seen"])))
 			w.Write([]byte(line))
 		}
