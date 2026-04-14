@@ -49,7 +49,11 @@ const TIME_RANGE_OPTIONS = [
   {value: 30, label: '近30分钟'},
   {value: 60, label: '近1小时'},
   {value: 720, label: '近12小时'},
+  {value: 1440, label: '近1天'},
+  {value: 4320, label: '近3天'},
   {value: 10080, label: '近7天'},
+  {value: 21600, label: '近15天'},
+  {value: 43200, label: '近30天'},
   {value: 0, label: '显示全部'},
 ];
 const TIME_RANGE_OPTIONS_NO_ALL = TIME_RANGE_OPTIONS.filter(item => item.value !== 0);
