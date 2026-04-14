@@ -905,7 +905,6 @@ func (s *Server) streamExportUserSummary(w http.ResponseWriter, flusher http.Flu
 }
 
 func (s *Server) streamExportUserTotal(w http.ResponseWriter, flusher http.Flusher, search, startDate, endDate string) {
-	// Reuse handleUserTotal logic: get detail data, enrich, aggregate
 	detailItems, err := s.store.QueryUserSummary(search, startDate, endDate)
 	if err != nil {
 		log.Printf("[api] export user-total error: %v", err)
@@ -926,18 +925,15 @@ func (s *Server) streamExportUserTotal(w http.ResponseWriter, flusher http.Flush
 		}
 	}
 
-	type userAgg struct {
-		SrcUser, SrcDept                                              string
-		IPs                                                           map[string]bool
-		VendorCount                                                   map[string]bool
-		SessionCount, RequestCount                                    int
-		UplinkBytes, DownlinkBytes, TotalBytes                        int64
-		InputTokens, OutputTokens, TotalTokens                        int64
-		CostUSD                                                       float64
-		FirstSeen, LastSeen                                           string
+	// Group detail items by user key, preserving order
+	type userGroup struct {
+		Key, DisplayUser, Dept string
+		IPs                    map[string]bool
+		Details                []map[string]interface{}
+		TotalCost              float64
 	}
-	aggMap := make(map[string]*userAgg)
-	aggOrder := []string{}
+	groupMap := make(map[string]*userGroup)
+	groupOrder := []string{}
 
 	for _, item := range detailItems {
 		srcUser := toString(item["src_user"])
@@ -950,73 +946,64 @@ func (s *Server) streamExportUserTotal(w http.ResponseWriter, flusher http.Flush
 			}
 			key = "ip:" + firstIP
 		}
-		agg, exists := aggMap[key]
+		g, exists := groupMap[key]
 		if !exists {
-			agg = &userAgg{SrcUser: srcUser, SrcDept: toString(item["src_department"]), IPs: make(map[string]bool), VendorCount: make(map[string]bool)}
-			aggMap[key] = agg
-			aggOrder = append(aggOrder, key)
+			displayUser := srcUser
+			if displayUser == "" {
+				displayUser = "N/A"
+			}
+			g = &userGroup{Key: key, DisplayUser: displayUser, Dept: toString(item["src_department"]), IPs: make(map[string]bool)}
+			groupMap[key] = g
+			groupOrder = append(groupOrder, key)
 		}
 		for _, ip := range strings.Split(srcIP, ",") {
 			if ip = strings.TrimSpace(ip); ip != "" {
-				agg.IPs[ip] = true
+				g.IPs[ip] = true
 			}
 		}
-		agg.VendorCount[toString(item["vendor"])] = true
 		if d := toString(item["src_department"]); d != "" {
-			agg.SrcDept = d
+			g.Dept = d
 		}
-		agg.SessionCount += int(toInt64(item["session_count"]))
-		agg.RequestCount += int(toInt64(item["request_count"]))
-		agg.UplinkBytes += toInt64(item["uplink_bytes"])
-		agg.DownlinkBytes += toInt64(item["downlink_bytes"])
-		agg.TotalBytes += toInt64(item["total_bytes"])
-		agg.InputTokens += toInt64(item["input_tokens"])
-		agg.OutputTokens += toInt64(item["output_tokens"])
-		agg.TotalTokens += toInt64(item["total_tokens"])
-		agg.CostUSD += toFloat64(item["estimated_cost_usd"])
-		fs := toString(item["first_seen"])
-		ls := toString(item["last_seen"])
-		if agg.FirstSeen == "" || (fs != "" && fs < agg.FirstSeen) {
-			agg.FirstSeen = fs
-		}
-		if ls > agg.LastSeen {
-			agg.LastSeen = ls
-		}
+		g.Details = append(g.Details, item)
+		g.TotalCost += toFloat64(item["estimated_cost_usd"])
 	}
 
-	// Sort by cost desc
-	sort.SliceStable(aggOrder, func(i, j int) bool {
-		return aggMap[aggOrder[i]].CostUSD > aggMap[aggOrder[j]].CostUSD
+	// Sort by total cost desc
+	sort.SliceStable(groupOrder, func(i, j int) bool {
+		return groupMap[groupOrder[i]].TotalCost > groupMap[groupOrder[j]].TotalCost
 	})
 
-	w.Write([]byte("用户,部门,用户IP,使用厂商数,请求次数,上行流量,下行流量,总流量,输入Token,输出Token,总Token,预估金额USD,首次访问时间,最后访问时间\n"))
+	w.Write([]byte("用户,部门,用户IP,模型厂商,调用类型,访问域名,请求次数,上行流量,下行流量,总流量,输入Token,输出Token,总Token,预估金额USD,首次访问时间,最后访问时间\n"))
 	if flusher != nil {
 		flusher.Flush()
 	}
-	log.Printf("[api] streaming export user-total: %d users", len(aggOrder))
-	for _, key := range aggOrder {
-		agg := aggMap[key]
-		displayUser := agg.SrcUser
-		if displayUser == "" {
-			displayUser = "N/A"
-		}
-		ips := make([]string, 0, len(agg.IPs))
-		for ip := range agg.IPs {
+	log.Printf("[api] streaming export user-total: %d users, %d detail rows", len(groupOrder), len(detailItems))
+	for _, key := range groupOrder {
+		g := groupMap[key]
+		ips := make([]string, 0, len(g.IPs))
+		for ip := range g.IPs {
 			ips = append(ips, ip)
 		}
 		sort.Strings(ips)
-		line := fmt.Sprintf("%s,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%v,%s,%s\n",
-			csvField(displayUser), csvField(agg.SrcDept), csvField(strings.Join(ips, " ")),
-			len(agg.VendorCount), agg.RequestCount,
-			agg.UplinkBytes, agg.DownlinkBytes, agg.TotalBytes,
-			agg.InputTokens, agg.OutputTokens, agg.TotalTokens,
-			agg.CostUSD, csvField(agg.FirstSeen), csvField(agg.LastSeen))
-		w.Write([]byte(line))
+		ipStr := strings.Join(ips, " ")
+		for _, d := range g.Details {
+			line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%d,%d,%d,%d,%v,%v,%v,%v,%s,%s\n",
+				csvField(g.DisplayUser), csvField(g.Dept), csvField(ipStr),
+				csvField(toString(d["vendor"])),
+				csvField(toString(d["channel_type"])),
+				csvField(toString(d["domain"])),
+				toInt64(d["request_count"]),
+				toInt64(d["uplink_bytes"]), toInt64(d["downlink_bytes"]), toInt64(d["total_bytes"]),
+				d["input_tokens"], d["output_tokens"], d["total_tokens"],
+				d["estimated_cost_usd"],
+				csvField(toString(d["first_seen"])), csvField(toString(d["last_seen"])))
+			w.Write([]byte(line))
+		}
 	}
 	if flusher != nil {
 		flusher.Flush()
 	}
-	log.Printf("[api] export user-total complete: %d users written", len(aggOrder))
+	log.Printf("[api] export user-total complete: %d users, %d rows written", len(groupOrder), len(detailItems))
 }
 
 func csvField(s string) string {
