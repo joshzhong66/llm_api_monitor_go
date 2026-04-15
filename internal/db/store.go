@@ -407,7 +407,7 @@ func (s *Store) InsertRequestLogs(jobID int64, rows []*model.RequestLog) error {
 
 func (s *Store) insertRequestLogBatch(jobID int64, rows []*model.RequestLog) error {
 	var sb strings.Builder
-	sb.WriteString(`INSERT IGNORE INTO request_logs
+	sb.WriteString(`INSERT INTO request_logs
 		(capture_job_id, request_key, session_key, iface, src_ip, src_port,
 		 dst_ip, dst_port, seen_at, vendor, domain,
 		 uplink_bytes, downlink_bytes, total_bytes, request_count,
