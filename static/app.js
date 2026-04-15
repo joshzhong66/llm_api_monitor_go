@@ -919,6 +919,20 @@ function renderTargets() {
   `).join('');
 }
 
+function exportTargetsCsv() {
+  const groups = state.selectedVendor === '全部'
+    ? state.targets
+    : state.targets.filter(item => item.vendor === state.selectedVendor);
+  const rows = [];
+  groups.forEach(item => {
+    item.domains.forEach(d => {
+      rows.push([item.vendor, d.domain_pattern, d.match_type, d.source, d.enabled ? '启用' : '禁用', d.created_at || '', d.updated_at || '']);
+    });
+  });
+  downloadCsv(csvFilename('vendor_domains'), ['厂商', '域名规则', '匹配类型', '来源', '状态', '创建时间', '更新时间'], rows);
+  showToast(`已导出 ${rows.length} 条厂商域名规则`, 'success');
+}
+
 function csvEscape(value) {
   const text = String(value == null ? '' : value);
   if (/[",\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
@@ -1634,6 +1648,7 @@ document.getElementById('exportUserSummaryBtn').addEventListener('click', () => 
 document.getElementById('exportUserTotalBtn').addEventListener('click', () => {
   exportUserTotalCsv();
 });
+document.getElementById('exportTargetsBtn').addEventListener('click', exportTargetsCsv);
 
 // Hide empty sessions toggle
 function bindHideEmpty(checkboxId, group) {
