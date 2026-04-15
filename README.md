@@ -34,8 +34,11 @@
 | IP → 用户名映射 | 通过 AD 域控 + DNS 解析，自动关联 IP 到员工姓名和部门 |
 | Web 管理界面 | 中文 SPA 界面，支持分页、搜索、时间范围过滤、厂商筛选 |
 | 解析管道监控 | 前端实时展示延迟、进度、积压数量，命令行脚本一键查看 |
-| 多路并发写入 | goroutine Worker Pool + 批量多行 INSERT，消除锁竞争 |
-| 域名规则管理 | 通过 Web 界面或 API 动态添加新的厂商域名规则 |
+| 多路并发写入 | goroutine Worker Pool + 批量多行 INSERT IGNORE，4 路并发消除锁竞争 |
+| 域名规则管理 | 通过 Web 界面或 API 动态添加新的厂商域名规则，支持导出 CSV |
+| 用户消费排行 | 按用户维度统计 API 消费，支持厂商明细展开、流式导出 |
+| 接口实时流量 | 通过 iftop 采样网卡实时流量 Top N |
+| 流式 CSV 导出 | 后端直接流式输出，57 万行 13 秒完成 |
 
 ---
 
@@ -298,8 +301,16 @@ LLM_MONITOR_BPF=port 443 and (host api.openai.com or host chatgpt.com or host ap
 **过滤功能**：
 - **厂商筛选**：顶部标签切换
 - **搜索框**：支持按 IP、用户名、域名、厂商搜索
-- **时间范围**：最近 5/10/15/30/60 分钟或全部
+- **时间范围**：最近 5/10/15/30/60 分钟、12 小时、1/3/7/15/30 天或全部
 - **隐藏空会话**：过滤掉下行为 0 的 TCP 握手/探测流量（默认勾选）
+
+### 用户消费汇总
+
+按用户+厂商+域名维度统计消费，以消费金额从高到低排序。同一用户名不同 IP 自动合并，未识别用户显示 N/A。
+
+### 用户总消费排行
+
+每个用户一行，合并所有厂商消费之和。点击行可展开查看该用户的各厂商消费明细子表格。导出 CSV 包含展开的厂商明细。
 
 ### 请求明细（API / 网页）
 
@@ -309,13 +320,34 @@ LLM_MONITOR_BPF=port 443 and (host api.openai.com or host chatgpt.com or host ap
 
 展示 UDP/443 传输事件（如 HTTP/3、QUIC 流量），目前仅记录五元组和字节数。
 
+### 接口实时流量
+
+通过 iftop 采样 enp1s0f3 网卡的实时流量，展示 Top 20 条流量和网卡 RX/TX 速率。每次切换到该页面或 5 秒自动刷新时重新采样。
+
 ### 厂商域名规则
 
-查看和管理域名匹配规则。可在线添加新域名：
+查看和管理域名匹配规则。支持导出当前厂商的所有域名为 CSV。
 
-1. 填写厂商名称
-2. 填写域名（支持通配符 `*.example.com`）
-3. 选择匹配类型（exact / wildcard）
+**匹配类型说明**：
+
+| 类型 | 说明 | 示例 |
+|------|------|------|
+| 精确匹配（exact） | 域名完全一致才匹配 | `api.openai.com` |
+| 通配匹配（wildcard） | 支持 `*` 通配符，匹配子域名 | `*.openai.azure.com` |
+
+**来源说明**：
+
+| 来源 | 说明 |
+|------|------|
+| 官方内置（official） | 系统预置的厂商域名规则，首次启动自动创建 |
+| 自定义规则（custom） | 通过 Web 界面或 API 手动添加的规则 |
+| 兼容历史（legacy） | 从旧版本迁移保留的规则 |
+
+可在线添加新域名：
+
+1. 填写厂商名称（已存在的厂商会自动归入）
+2. 填写域名（支持通配符 `*.example.com`，多个用逗号分隔）
+3. 选择匹配类型
 4. 点击提交
 
 ---
@@ -336,6 +368,10 @@ LLM_MONITOR_BPF=port 443 and (host api.openai.com or host chatgpt.com or host ap
 | `/api/jobs` | GET | 抓包任务列表 | `limit` |
 | `/api/pipeline` | GET | 解析管道状态 | - |
 | `/api/quic-observations` | GET | QUIC 观测记录 | `limit` |
+| `/api/user-summary` | GET | 用户消费汇总（分页） | `page`, `page_size`, `search`, `vendor`, `time_window_minutes`, `start_date`, `end_date` |
+| `/api/user-total` | GET | 用户总消费排行（分页） | 同上 |
+| `/api/interface-traffic` | GET | 网卡实时流量（iftop） | - |
+| `/api/export-csv` | GET | 流式 CSV 导出 | `type`（logs/request-logs/user-summary/user-total）, 其他同上 |
 
 ### channel_class 参数
 
@@ -545,6 +581,19 @@ systemctl restart llm-api-monitor-go
 systemctl status llm-api-monitor-go
 ```
 
+### 一键部署
+
+```bash
+# 编译 + 重启
+bash scripts/deploy.sh
+
+# 编译 + 合并固定IP映射 + 重启
+bash scripts/deploy.sh --merge-ip
+
+# 只编译不重启
+bash scripts/deploy.sh --no-restart
+```
+
 ### 查看日志
 
 ```bash
@@ -664,15 +713,18 @@ llm_api_monitor_go/
 ### Q: 延迟越来越高？
 
 查看管道状态中的 pending 数量。如果持续增长：
-- 增大 `LLM_MONITOR_WINDOW_SECONDS`（推荐 60）减少 job 数量
-- 检查 MySQL 慢查询：`docker exec llm-monitor-mysql mysql -uroot -p密码 -e "SHOW GLOBAL STATUS LIKE 'Slow_queries';"`
+- 检查是否有残留的 Python tcpdump 进程：`ps aux | grep tcpdump`，如有多个同网卡的 tcpdump 需要停掉旧的
+- 检查 `capture_jobs` 中是否有大量 `merging` 卡住的 job：重置为 `queued` 让 backfill 重新处理
+- 当前 pcap 窗口为 30 秒，配合 4 路并发 Writer + INSERT IGNORE，正常延迟应在 30-60 秒
+- 检查 MySQL 锁等待：`SHOW GLOBAL STATUS LIKE 'Innodb_row_lock_current_waits';`
 - 确认 buffer pool 是否足够：建议 4-8GB
 
 ### Q: 用户名显示为空？
 
 1. 确认 `scripts/ip_user_map.json` 文件存在且包含该 IP
 2. 手动运行 `bash scripts/collect_ip_users.sh` 更新映射
-3. 该 IP 可能不在 AD 域控中（服务器、虚拟机等）
+3. 对于不在 AD 域控中的 IP（服务器、Mac、访客等），编辑 `scripts/fixed_user_ip.csv` 添加固定映射，然后执行 `bash scripts/deploy.sh --merge-ip` 合并
+4. Go 服务每 5 分钟自动热加载 `ip_user_map.json`，无需重启
 
 ### Q: pcap 文件占用大量磁盘？
 
@@ -691,3 +743,20 @@ llm_api_monitor_go/
 - TCP 握手/TLS 探测等短连接（可用"隐藏空会话"过滤）
 - BPF `host` 过滤器基于启动时 DNS 解析的 IP，如果 CDN IP 变化，部分响应包可能被漏抓
 - LLM API 的请求（prompt）通常远大于响应（streaming token），尤其是代理模式
+
+### Q: 接口实时流量的发送速率为 0？
+
+`enp1s0f3` 是交换机镜像口（SPAN port），内核级别 TX=0 是正常的硬件行为。镜像口只接收流量，不发送。上行和下行流量均通过 RX 接收，可在 iftop 流表中查看各流的方向。
+
+### Q: capture_jobs 的 status 含义？
+
+| status | 说明 |
+|--------|------|
+| `queued` | 等待解析 |
+| `parsing` | gopacket 正在解析 pcap |
+| `parsed_ready` | 解析完成，等待 Writer 写入 DB |
+| `merging` | Writer 正在写入 DB |
+| `merged` | 写入完成 |
+| `failed` | 失败（pcap 文件丢失、MySQL 错误等） |
+
+> **注意**：`applyTimeWindow` 子查询按 `status='merged'` 过滤。如果修改 status 生命周期，必须同步修改 `applyTimeWindow`，否则时间窗口查询会返回 0 条数据。

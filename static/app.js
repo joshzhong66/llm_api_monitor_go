@@ -923,10 +923,20 @@ function exportTargetsCsv() {
   const groups = state.selectedVendor === '全部'
     ? state.targets
     : state.targets.filter(item => item.vendor === state.selectedVendor);
+  const matchLabels = {exact: '精确匹配', wildcard: '通配匹配'};
+  const sourceLabels = {official: '官方内置', custom: '自定义规则', legacy: '兼容历史'};
   const rows = [];
   groups.forEach(item => {
     item.domains.forEach(d => {
-      rows.push([item.vendor, d.domain_pattern, d.match_type, d.source, d.enabled ? '启用' : '禁用', d.created_at || '', d.updated_at || '']);
+      rows.push([
+        item.vendor,
+        d.domain_pattern,
+        matchLabels[d.match_type] || d.match_type,
+        sourceLabels[d.source] || d.source,
+        d.enabled ? '启用' : '禁用',
+        d.created_at || '',
+        d.updated_at || '',
+      ]);
     });
   });
   downloadCsv(csvFilename('vendor_domains'), ['厂商', '域名规则', '匹配类型', '来源', '状态', '创建时间', '更新时间'], rows);
